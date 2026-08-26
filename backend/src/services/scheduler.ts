@@ -83,8 +83,9 @@ export class PartitionedSchedulerService {
    * 4. Hand off to Seat Lock Service or Reject SEATS_EXHAUSTED
    */
   public static async processJob(job: BookingJob): Promise<JobResult> {
-    const client = await pool.connect();
+    let client: any = null;
     try {
+      client = await pool.connect();
       await client.query('BEGIN');
 
       // 1. SELECT FOR UPDATE on inventory row
@@ -159,13 +160,15 @@ export class PartitionedSchedulerService {
       };
 
     } catch (err: any) {
-      await client.query('ROLLBACK');
-      console.error('[Scheduler] Error processing booking job:', err.message);
-
+      if (client) {
+        try { await client.query('ROLLBACK'); } catch {}
+      }
       // Fallback in-memory inventory decrement for demo mode if DB is unavailable
       return SeatLockService.fallbackReserveSeat(job);
     } finally {
-      client.release();
+      if (client) {
+        try { client.release(); } catch {}
+      }
     }
   }
 }
