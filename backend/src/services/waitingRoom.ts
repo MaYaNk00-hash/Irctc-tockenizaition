@@ -42,6 +42,8 @@ interface InMemTicket {
 const memoryPool: Map<string, InMemTicket[]> = new Map();
 const memorySecondaryFifo: Map<string, InMemTicket[]> = new Map();
 const memoryAdmittedTokens: Map<string, { userId: number; trainKey: string; expiresAt: number }> = new Map();
+const memoryTickets: Map<string, InMemTicket> = new Map();
+const activeTrainKeys: Set<string> = new Set();
 let isWindowFrozen = false;
 let batchCounter = 0;
 
@@ -100,9 +102,20 @@ export class WaitingRoomService {
     }
 
     const trainKey = this.getTrainKey(req.trainId, req.seatClass, req.travelDate);
+    activeTrainKeys.add(trainKey);
     const ticketId = crypto.randomUUID();
     const joinedAt = Date.now();
     const isSoftBlocked = risk.friction === 'VERY_HIGH_SOFT_BLOCK';
+
+    const ticketObj: InMemTicket = {
+      ticketId,
+      userId: req.userId,
+      trainKey,
+      joinedAt,
+      softBlocked: isSoftBlocked,
+      status: 'QUEUED'
+    };
+    memoryTickets.set(ticketId, ticketObj);
 
     // Issue short-lived JWT ticket
     const jwtTicket = jwt.sign(
@@ -140,15 +153,6 @@ export class WaitingRoomService {
       if (!memoryPool.has(trainKey)) memoryPool.set(trainKey, []);
       if (!memorySecondaryFifo.has(trainKey)) memorySecondaryFifo.set(trainKey, []);
 
-      const ticketObj: InMemTicket = {
-        ticketId,
-        userId: req.userId,
-        trainKey,
-        joinedAt,
-        softBlocked: isSoftBlocked,
-        status: 'QUEUED'
-      };
-
       if (isWindowFrozen) {
         memorySecondaryFifo.get(trainKey)!.push(ticketObj);
       } else {
@@ -168,60 +172,66 @@ export class WaitingRoomService {
    * Get Live Queue Status
    */
   public static async getStatus(ticketId: string, trainKey: string): Promise<WaitingRoomStatus> {
-    try {
-      const meta = await redis.hgetall(`ticket_meta:${ticketId}`);
-      if (meta && meta.status === 'ADMITTED') {
+    if (redis.status === 'ready') {
+      try {
+        const meta = await redis.hgetall(`ticket_meta:${ticketId}`);
+        if (meta && meta.status === 'ADMITTED') {
+          return {
+            ticketId,
+            status: 'ADMITTED',
+            position: 0,
+            totalInQueue: 0,
+            batchNumber: parseInt(meta.batchNumber || '1', 10),
+            admissionToken: meta.admissionToken,
+            estimatedWaitSeconds: 0
+          };
+        }
+
+        const redisKey = `waiting_room:${trainKey}`;
+        const rank = await redis.zrank(redisKey, ticketId);
+        const total = await redis.zcard(redisKey);
+
+        if (rank !== null && rank >= 0) {
+          const estBatches = Math.ceil((rank + 1) / waitingRoomConfig.batchSize);
+          const estWaitSec = Math.ceil((estBatches * waitingRoomConfig.batchIntervalMs) / 1000);
+          return {
+            ticketId,
+            status: 'QUEUED',
+            position: rank + 1,
+            totalInQueue: total,
+            estimatedWaitSeconds: estWaitSec
+          };
+        }
+      } catch {
+        // Fallback to in-memory check below
+      }
+    }
+
+    // In-memory check
+    const item = memoryTickets.get(ticketId);
+    if (item) {
+      if (item.status === 'ADMITTED') {
         return {
           ticketId,
           status: 'ADMITTED',
           position: 0,
           totalInQueue: 0,
-          batchNumber: parseInt(meta.batchNumber || '1', 10),
-          admissionToken: meta.admissionToken,
+          batchNumber: item.batchNumber || 1,
+          admissionToken: item.admissionToken,
           estimatedWaitSeconds: 0
         };
       }
 
-      const redisKey = `waiting_room:${trainKey}`;
-      const rank = await redis.zrank(redisKey, ticketId);
-      const total = await redis.zcard(redisKey);
-
-      if (rank !== null && rank >= 0) {
-        const estBatches = Math.ceil((rank + 1) / waitingRoomConfig.batchSize);
-        const estWaitSec = Math.ceil((estBatches * waitingRoomConfig.batchIntervalMs) / 1000);
-        return {
-          ticketId,
-          status: 'QUEUED',
-          position: rank + 1,
-          totalInQueue: total,
-          estimatedWaitSeconds: estWaitSec
-        };
-      }
-    } catch {
-      // In-memory check
       const poolList = memoryPool.get(trainKey) || [];
       const idx = poolList.findIndex(t => t.ticketId === ticketId);
-      if (idx >= 0) {
-        const item = poolList[idx];
-        if (item.status === 'ADMITTED') {
-          return {
-            ticketId,
-            status: 'ADMITTED',
-            position: 0,
-            totalInQueue: poolList.length,
-            batchNumber: item.batchNumber,
-            admissionToken: item.admissionToken,
-            estimatedWaitSeconds: 0
-          };
-        }
-        return {
-          ticketId,
-          status: 'QUEUED',
-          position: idx + 1,
-          totalInQueue: poolList.length,
-          estimatedWaitSeconds: Math.ceil(((idx + 1) / waitingRoomConfig.batchSize) * 3)
-        };
-      }
+      const pos = idx >= 0 ? idx + 1 : 1;
+      return {
+        ticketId,
+        status: 'QUEUED',
+        position: pos,
+        totalInQueue: Math.max(poolList.length, 1),
+        estimatedWaitSeconds: Math.ceil((pos / waitingRoomConfig.batchSize) * 3)
+      };
     }
 
     return {
@@ -293,23 +303,39 @@ export class WaitingRoomService {
     return admittedCount;
   }
 
+  public static async processAllBatches(): Promise<void> {
+    for (const trainKey of Array.from(activeTrainKeys)) {
+      await this.processNextBatch(trainKey);
+    }
+  }
+
   private static async admitUser(ticketId: string, userId: number, trainKey: string, batchNumber: number) {
     const admissionToken = crypto.randomUUID();
     const expiresAt = Date.now() + waitingRoomConfig.admissionTtlSeconds * 1000;
 
-    try {
-      await redis.hset(`ticket_meta:${ticketId}`, {
-        status: 'ADMITTED',
-        batchNumber,
-        admissionToken
-      });
-      await redis.setex(`admission_token:${admissionToken}`, waitingRoomConfig.admissionTtlSeconds, JSON.stringify({ userId, trainKey }));
-      await pool.query(
-        `UPDATE waiting_room_tickets SET status = 'ADMITTED', batch_number = $1 WHERE ticket_id = $2`,
-        [batchNumber, ticketId]
-      );
-    } catch {
-      memoryAdmittedTokens.set(admissionToken, { userId, trainKey, expiresAt });
+    const memItem = memoryTickets.get(ticketId);
+    if (memItem) {
+      memItem.status = 'ADMITTED';
+      memItem.batchNumber = batchNumber;
+      memItem.admissionToken = admissionToken;
+    }
+    memoryAdmittedTokens.set(admissionToken, { userId, trainKey, expiresAt });
+
+    if (redis.status === 'ready') {
+      try {
+        await redis.hset(`ticket_meta:${ticketId}`, {
+          status: 'ADMITTED',
+          batchNumber,
+          admissionToken
+        });
+        await redis.setex(`admission_token:${admissionToken}`, waitingRoomConfig.admissionTtlSeconds, JSON.stringify({ userId, trainKey }));
+        await pool.query(
+          `UPDATE waiting_room_tickets SET status = 'ADMITTED', batch_number = $1 WHERE ticket_id = $2`,
+          [batchNumber, ticketId]
+        );
+      } catch {
+        // Fallback already saved in memoryAdmittedTokens and memoryTickets
+      }
     }
   }
 

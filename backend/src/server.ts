@@ -237,9 +237,12 @@ wss.on('connection', (socket: WebSocket, req: http.IncomingMessage) => {
 // --- BACKGROUND LOOPS ---
 setInterval(async () => {
   try {
-    await WaitingRoomService.processNextBatch('12002:3A:2026-08-26');
-    await WaitingRoomService.processNextBatch('12951:3A:2026-08-26');
-    await WaitingRoomService.processNextBatch('20901:CC:2026-08-26');
+    await WaitingRoomService.processAllBatches();
+    for (const train of SEEDED_TRAINS) {
+      for (const cls of train.classes) {
+        await WaitingRoomService.processNextBatch(`${train.trainId}:${cls}:2026-08-26`);
+      }
+    }
   } catch {
     // Suppress
   }
