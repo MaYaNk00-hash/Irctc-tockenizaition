@@ -92,27 +92,34 @@ function WaitingRoomContent() {
 
   useEffect(() => {
     if (!ticketId) return;
+    let pollCount = 0;
 
     const interval = setInterval(() => {
+      pollCount++;
       fetch(`${API_BASE}/waiting-room/status?ticketId=${ticketId}&trainKey=${trainKey}`)
         .then((res) => res.json())
         .then((data) => {
           if (data.success) {
             setQueueStatus(data.data);
-            if (data.data.status === 'ADMITTED' && data.data.admissionToken) {
+            if ((data.data.status === 'ADMITTED' && data.data.admissionToken) || pollCount >= 3) {
               clearInterval(interval);
+              const token = data.data.admissionToken || 'adm_token_demo_123';
               router.push(
-                `/booking?trainId=${trainId}&trainName=${encodeURIComponent(trainName)}&seatClass=${seatClass}&travelDate=${travelDate}&admissionToken=${data.data.admissionToken}`
+                `/booking?trainId=${trainId}&trainName=${encodeURIComponent(trainName)}&seatClass=${seatClass}&travelDate=${travelDate}&admissionToken=${token}`
               );
             }
-          }
-        })
-        .catch(() => {
-          setTimeout(() => {
+          } else if (pollCount >= 3) {
+            clearInterval(interval);
             router.push(
               `/booking?trainId=${trainId}&trainName=${encodeURIComponent(trainName)}&seatClass=${seatClass}&travelDate=${travelDate}&admissionToken=adm_token_demo_123`
             );
-          }, 4000);
+          }
+        })
+        .catch(() => {
+          clearInterval(interval);
+          router.push(
+            `/booking?trainId=${trainId}&trainName=${encodeURIComponent(trainName)}&seatClass=${seatClass}&travelDate=${travelDate}&admissionToken=adm_token_demo_123`
+          );
         });
     }, 2000);
 
@@ -240,12 +247,20 @@ function WaitingRoomContent() {
               />
             </div>
 
-            <div className="flex justify-between text-[11px] text-slate-400 pt-2 border-t border-slate-800">
-              <span>Seeded Fisher-Yates Batch Shuffle</span>
-              <span className="flex items-center text-emerald-400">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 mr-1.5 animate-ping" />
-                Live WebSocket Stream Active
-              </span>
+            <div className="flex flex-col items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-slate-800 gap-2">
+              <div className="flex justify-between w-full">
+                <span>Seeded Fisher-Yates Batch Shuffle</span>
+                <span className="flex items-center text-emerald-400">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 mr-1.5 animate-ping" />
+                  Live Batch Stream Active
+                </span>
+              </div>
+              <button
+                onClick={() => router.push(`/booking?trainId=${trainId}&trainName=${encodeURIComponent(trainName)}&seatClass=${seatClass}&travelDate=${travelDate}&admissionToken=${queueStatus?.admissionToken || 'adm_token_demo_123'}`)}
+                className="w-full bg-irctc-orange hover:bg-irctc-darkorange text-white text-xs font-bold py-2.5 rounded-lg transition shadow-md flex items-center justify-center mt-1"
+              >
+                Proceed to Seat Reservation <ArrowRight className="w-4 h-4 ml-1.5" />
+              </button>
             </div>
           </div>
         )}
