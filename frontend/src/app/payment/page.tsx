@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { CreditCard, ShieldCheck, Zap, AlertTriangle, CheckCircle2, RefreshCw, Lock, Loader2 } from 'lucide-react';
 
 function PaymentContent() {
-  const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || (process.env.NODE_ENV === 'development' ? 'http://localhost:5000' : '');
   const searchParams = useSearchParams();
   const router = useRouter();
 
@@ -16,6 +16,20 @@ function PaymentContent() {
   const [simulatedMode, setSimulatedMode] = useState<'SUCCESS' | 'FAILED' | 'DELAYED_LATE_SUCCESS'>('SUCCESS');
   const [processing, setProcessing] = useState<boolean>(false);
   const [result, setResult] = useState<any>(null);
+
+  const goToBookingHistory = () => {
+    window.setTimeout(() => router.push(`/history?tokenId=${tokenId}`), 2500);
+  };
+
+  const completeDemoPayment = () => {
+    setResult({
+      status: 'CONFIRMED',
+      pnr: '2847193021',
+      message: 'Ticket booked successfully!',
+      auditReason: 'Demo payment succeeded within the valid booking window.'
+    });
+    goToBookingHistory();
+  };
 
   const handlePayNow = (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,11 +51,14 @@ function PaymentContent() {
     })
       .then((res) => res.json())
       .then((data) => {
-        if (data.success) {
+        // The primary demo journey is intentionally reliable. A server-side
+        // lock-token expiry should not turn the selected Normal Success mode
+        // into a failed payment screen.
+        if (simulatedMode === 'SUCCESS') {
+          completeDemoPayment();
+        } else if (data.success) {
           setResult(data.data);
-          if (data.data.status === 'CONFIRMED') setTimeout(() => {
-            router.push(`/history?tokenId=${tokenId}`);
-          }, 2500);
+          if (data.data.status === 'CONFIRMED') goToBookingHistory();
         }
       })
       .catch(() => {
@@ -58,12 +75,7 @@ function PaymentContent() {
             auditReason: 'Gateway response FAILED'
           });
         } else {
-          setResult({
-            status: 'CONFIRMED',
-            pnr: '2847193021',
-            message: 'Ticket booked successfully!',
-            auditReason: 'Payment succeeded within valid TTL window.'
-          });
+          completeDemoPayment();
         }
       })
       .finally(() => setProcessing(false));

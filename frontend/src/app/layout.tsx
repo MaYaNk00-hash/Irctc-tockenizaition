@@ -1,7 +1,9 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import Link from 'next/link';
-import { ShieldCheck, Train, Clock, Server, User, Search, History, LayoutDashboard, PhoneCall, HelpCircle } from 'lucide-react';
+import { ShieldCheck, Clock, Server, Search, History, LayoutDashboard, PhoneCall, HelpCircle } from 'lucide-react';
+import BrandLink from './brand-link';
+import AuthLink from './auth-link';
 
 export const metadata: Metadata = {
   title: 'IRCTC Next-Gen Tatkal Ticket Booking System',
@@ -43,23 +45,11 @@ export default function RootLayout({
         {/* Main Header */}
         <header className="irctc-gradient text-white sticky top-0 z-50 shadow-md">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex justify-between items-center">
-            <Link href="/" className="flex items-center space-x-3 group">
-              <div className="bg-irctc-orange p-2 rounded-lg shadow-md group-hover:scale-105 transition-transform">
-                <Train className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <div className="flex items-center space-x-2">
-                  <span className="font-extrabold text-xl tracking-tight text-white">IRCTC</span>
-                  <span className="bg-orange-500/30 text-amber-300 text-xs px-2 py-0.5 rounded font-mono border border-amber-500/40">
-                    TATKAL FAIR-BOOKING
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-300 tracking-wide">Indian Railways Catering and Tourism Corporation</p>
-              </div>
-            </Link>
+            <BrandLink />
 
             <nav className="hidden md:flex items-center space-x-1 text-sm font-medium">
-              <Link href="/" className="px-3 py-2 rounded-md hover:bg-white/10 transition flex items-center">
+              <Link href="/landing" className="px-3 py-2 rounded-md hover:bg-white/10 transition">Home</Link>
+              <Link href="/search" className="px-3 py-2 rounded-md hover:bg-white/10 transition flex items-center">
                 <Search className="w-4 h-4 mr-1.5 text-orange-400" />
                 Search Trains
               </Link>
@@ -71,10 +61,7 @@ export default function RootLayout({
                 <History className="w-4 h-4 mr-1.5 text-sky-400" />
                 Audit Trail
               </Link>
-              <Link href="/auth" className="px-3 py-2 rounded-md hover:bg-white/10 transition flex items-center">
-                <User className="w-4 h-4 mr-1.5 text-emerald-300" />
-                Login / Sign up
-              </Link>
+              <AuthLink />
               <Link href="/admin" className="px-3 py-2 rounded-md bg-white/10 hover:bg-white/20 transition text-amber-300 flex items-center border border-amber-400/30">
                 <LayoutDashboard className="w-4 h-4 mr-1.5" />
                 Admin Controls

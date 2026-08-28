@@ -19,7 +19,7 @@ export default function MockAuthPage() {
     const displayName = name.trim() || email.split('@')[0] || 'Railway passenger';
     window.localStorage.setItem('tatkal.mockUser', JSON.stringify({ displayName, email, signedInAt: new Date().toISOString() }));
     setMessage(mode === 'login' ? 'Mock login successful. Redirecting to train search…' : 'Mock account created. Redirecting to train search…');
-    window.setTimeout(() => router.push('/'), 650);
+    window.setTimeout(() => router.push('/search'), 650);
   };
 
   return (

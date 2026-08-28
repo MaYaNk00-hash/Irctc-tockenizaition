@@ -12,10 +12,9 @@ import { AuditService } from './services/auditService';
 import { idempotencyMiddleware } from './middleware/idempotency';
 
 const app = express();
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws' });
+const corsOrigins = process.env.CORS_ORIGIN?.split(',').map(origin => origin.trim()).filter(Boolean);
 
-app.use(cors());
+app.use(cors({ origin: corsOrigins?.length ? corsOrigins : true }));
 app.use(express.json());
 
 // Apply idempotency middleware to all mutating endpoints
@@ -46,9 +45,10 @@ app.get('/api/trains', (req, res) => {
   res.json({ success: true, data: SEEDED_TRAINS });
 });
 
-app.get('/api/seats', (req, res) => {
+app.get('/api/seats', async (req, res) => {
   const { trainId, seatClass, travelDate } = req.query as Record<string, string>;
   if (!trainId || !seatClass || !travelDate) return res.status(400).json({ success: false, error: 'trainId, seatClass and travelDate are required' });
+  await SeatLockService.reconcileExpiredTokens();
   res.json({ success: true, data: SeatLockService.getSeatMap(trainId, seatClass, travelDate) });
 });
 
@@ -106,6 +106,10 @@ app.get('/waiting-room/status', async (req, res) => {
       return res.status(400).json({ success: false, error: 'ticketId and trainKey query params required' });
     }
 
+    // Vercel Functions do not have a dependable process-wide timer. Advancing a
+    // batch when the existing polling endpoint is called preserves the demo's
+    // queue behaviour without requiring an always-on worker.
+    await WaitingRoomService.processNextBatch(trainKey);
     const status = await WaitingRoomService.getStatus(ticketId, trainKey);
     res.json({ success: true, data: status });
   } catch (err: any) {
@@ -122,6 +126,7 @@ app.post('/api/booking/book', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Admission token required' });
     }
 
+    await SeatLockService.reconcileExpiredTokens();
     const isValidToken = WaitingRoomService.isAdmissionTokenValid(admissionToken, userId || 1001, trainId, seatClass, travelDate);
     if (!isValidToken) {
       return res.status(403).json({ success: false, error: 'Admission token expired or invalid.' });
@@ -150,6 +155,7 @@ app.post('/api/booking/book', async (req, res) => {
 // 5. Booking Status REST Poll Fallback
 app.get('/booking/status/:tokenId', async (req, res) => {
   try {
+    await SeatLockService.reconcileExpiredTokens();
     const token = await SeatLockService.getValidToken(req.params.tokenId);
     if (!token) {
       return res.status(404).json({ success: false, error: 'Booking token not found' });
@@ -178,6 +184,7 @@ app.post('/api/payment/process', async (req, res) => {
       return res.status(400).json({ success: false, error: 'tokenId and amount are required' });
     }
 
+    await SeatLockService.reconcileExpiredTokens();
     const result = await PaymentOrchestratorService.processPayment({
       tokenId,
       amount,
@@ -237,50 +244,42 @@ app.post('/api/admin/config', (req, res) => {
   res.json({ success: true, config: waitingRoomConfig });
 });
 
-// --- WEBSOCKET HANDLING ---
-wss.on('connection', (socket: WebSocket, req: http.IncomingMessage) => {
-  const url = req.url || '';
-  const match = url.match(/[?&]tokenId=([^&]+)/);
-  if (match) {
-    const tokenId = match[1];
-    AuditService.subscribeWs(tokenId, socket);
-  }
+// Local development keeps the existing WebSocket and worker behaviour. Vercel
+// imports the Express app as a function, where persistent sockets and timers
+// are not reliable; the HTTP polling routes above perform the needed work.
+if (require.main === module) {
+  const server = http.createServer(app);
+  const wss = new WebSocketServer({ server, path: '/ws' });
 
-  socket.on('message', (message: string) => {
+  wss.on('connection', (socket: WebSocket, req: http.IncomingMessage) => {
+    const match = (req.url || '').match(/[?&]tokenId=([^&]+)/);
+    if (match) AuditService.subscribeWs(match[1], socket);
+    socket.on('message', (message: string) => {
+      try {
+        const data = JSON.parse(message.toString());
+        if (data.type === 'SUBSCRIBE' && data.tokenId) AuditService.subscribeWs(data.tokenId, socket);
+      } catch {
+        // Ignore malformed local WebSocket messages.
+      }
+    });
+  });
+
+  setInterval(async () => {
     try {
-      const data = JSON.parse(message.toString());
-      if (data.type === 'SUBSCRIBE' && data.tokenId) {
-        AuditService.subscribeWs(data.tokenId, socket);
+      await WaitingRoomService.processAllBatches();
+      for (const train of SEEDED_TRAINS) {
+        for (const cls of train.classes) await WaitingRoomService.processNextBatch(`${train.trainId}:${cls}:2026-08-26`);
       }
     } catch {
-      // Ignore
+      // The in-memory fallback keeps the demo usable when services are offline.
     }
-  });
-});
+  }, waitingRoomConfig.batchIntervalMs);
 
-// --- BACKGROUND LOOPS ---
-setInterval(async () => {
-  try {
-    await WaitingRoomService.processAllBatches();
-    for (const train of SEEDED_TRAINS) {
-      for (const cls of train.classes) {
-        await WaitingRoomService.processNextBatch(`${train.trainId}:${cls}:2026-08-26`);
-      }
-    }
-  } catch {
-    // Suppress
-  }
-}, waitingRoomConfig.batchIntervalMs);
+  setInterval(() => { SeatLockService.reconcileExpiredTokens().catch(() => undefined); }, 2000);
 
-setInterval(async () => {
-  try {
-    await SeatLockService.reconcileExpiredTokens();
-  } catch {
-    // Suppress
-  }
-}, 2000);
+  const PORT = process.env.PORT || 5000;
+  server.listen(PORT, () => console.log(`Tatkal backend listening on port ${PORT}`));
+}
 
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`Tatkal backend listening on port ${PORT}`);
-});
+export { app };
+export default app;

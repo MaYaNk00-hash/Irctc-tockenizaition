@@ -14,7 +14,7 @@ interface AuditItem {
 }
 
 function HistoryContent() {
-  const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || (process.env.NODE_ENV === 'development' ? 'http://localhost:5000' : '');
   const searchParams = useSearchParams();
   const tokenId = searchParams.get('tokenId') || 'token_demo_123';
 
@@ -31,8 +31,13 @@ function HistoryContent() {
     ])
       .then(([statusRes, auditRes]) => {
         if (statusRes && statusRes.success) setTokenStatus(statusRes.data);
-        if (auditRes && auditRes.success) setLogs(auditRes.data);
-        else setFallbackLogs();
+        if (auditRes && auditRes.success && Array.isArray(auditRes.data) && auditRes.data.length > 0) {
+          setLogs(auditRes.data);
+        } else {
+          // A confirmed mock booking can legitimately have no server audit rows
+          // (for example after an offline demo payment). Keep the timeline useful.
+          setFallbackLogs();
+        }
       })
       .catch(() => setFallbackLogs())
       .finally(() => setLoading(false));
