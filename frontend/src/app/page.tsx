@@ -21,6 +21,9 @@ export default function SearchPage() {
   const [selectedClass, setSelectedClass] = useState<string>('3A');
   const [travelDate, setTravelDate] = useState<string>('2026-08-26');
   const [loading, setLoading] = useState<boolean>(true);
+  const [from, setFrom] = useState('NDLS (New Delhi)');
+  const [to, setTo] = useState('MMCT (Mumbai Central)');
+  const [passengerCount, setPassengerCount] = useState(1);
 
   const [mouseEventsCount, setMouseEventsCount] = useState<number>(0);
   const [startTime] = useState<number>(Date.now());
@@ -72,9 +75,12 @@ export default function SearchPage() {
     const fingerprint = `fp_browser_${typeof window !== 'undefined' ? window.navigator.userAgent.replace(/\s+/g, '') : 'default'}`;
 
     router.push(
-      `/waiting-room?trainId=${train.trainId}&trainName=${encodeURIComponent(train.name)}&seatClass=${seatClass}&travelDate=${travelDate}&fp=${encodeURIComponent(fingerprint)}&signals=${encodeURIComponent(JSON.stringify(signals))}`
+      `/waiting-room?trainId=${train.trainId}&trainName=${encodeURIComponent(train.name)}&seatClass=${seatClass}&travelDate=${travelDate}&passengers=${passengerCount}&fp=${encodeURIComponent(fingerprint)}&signals=${encodeURIComponent(JSON.stringify(signals))}`
     );
   };
+
+  const stations = Array.from(new Set(trains.flatMap(train => [train.origin, train.destination])));
+  const filteredTrains = trains.filter(train => (from === 'Any station' || train.origin === from) && (to === 'Any station' || train.destination === to) && train.classes.includes(selectedClass));
 
   return (
     <div className="space-y-6">
@@ -108,25 +114,19 @@ export default function SearchPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1">From Station</label>
-            <input
-              type="text"
-              value="NDLS (New Delhi)"
-              readOnly
+            <select value={from} onChange={(e) => setFrom(e.target.value)}
               className="w-full bg-slate-100 border border-slate-300 rounded-lg p-2.5 text-sm font-semibold text-slate-800"
-            />
+            ><option>Any station</option>{stations.map(station => <option key={station}>{station}</option>)}</select>
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1">To Station</label>
-            <input
-              type="text"
-              value="MMCT / RKMP / SDAH"
-              readOnly
+            <select value={to} onChange={(e) => setTo(e.target.value)}
               className="w-full bg-slate-100 border border-slate-300 rounded-lg p-2.5 text-sm font-semibold text-slate-800"
-            />
+            ><option>Any station</option>{stations.map(station => <option key={station}>{station}</option>)}</select>
           </div>
 
           <div>
@@ -140,6 +140,7 @@ export default function SearchPage() {
               />
             </div>
           </div>
+          <div><label className="block text-xs font-semibold text-slate-600 mb-1">Passengers</label><select value={passengerCount} onChange={(e) => setPassengerCount(Number(e.target.value))} className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm font-semibold text-slate-800">{[1, 2, 3, 4].map(count => <option key={count} value={count}>{count} passenger{count > 1 ? 's' : ''}</option>)}</select></div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1">Preferred Class</label>
@@ -164,7 +165,7 @@ export default function SearchPage() {
           <h2 className="text-lg font-bold text-irctc-navy flex items-center">
             <span>Available Tatkal Trains</span>
             <span className="ml-2 bg-slate-200 text-slate-700 text-xs px-2 py-0.5 rounded-full font-mono">
-              {trains.length} Trains
+              {filteredTrains.length} Trains
             </span>
           </h2>
           <span className="text-xs text-slate-500">Live Partitioned Queue Protection</span>
@@ -176,7 +177,7 @@ export default function SearchPage() {
             <p className="mt-2 text-sm font-medium">Fetching Tatkal inventory status...</p>
           </div>
         ) : (
-          trains.map((train) => (
+          filteredTrains.map((train) => (
             <div
               key={train.trainId}
               className="bg-white rounded-xl p-5 shadow-sm border border-slate-200 hover:shadow-md transition space-y-4"
@@ -215,11 +216,10 @@ export default function SearchPage() {
                   return (
                     <div
                       key={cls}
-                      className={`p-3 rounded-lg border flex flex-col justify-between transition ${
-                        isMatch
+                      className={`p-3 rounded-lg border flex flex-col justify-between transition ${isMatch
                           ? 'border-irctc-orange bg-orange-50/60 ring-2 ring-irctc-orange/20'
                           : 'border-slate-200 bg-slate-50'
-                      }`}
+                        }`}
                     >
                       <div className="flex justify-between items-center mb-2">
                         <span className="font-bold text-xs text-slate-800">{cls}</span>
@@ -243,6 +243,7 @@ export default function SearchPage() {
             </div>
           ))
         )}
+        {!loading && filteredTrains.length === 0 && <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600">No mock Tatkal train matches this route and class. Try another station or class.</div>}
       </div>
     </div>
   );

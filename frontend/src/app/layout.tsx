@@ -71,6 +71,10 @@ export default function RootLayout({
                 <History className="w-4 h-4 mr-1.5 text-sky-400" />
                 Audit Trail
               </Link>
+              <Link href="/auth" className="px-3 py-2 rounded-md hover:bg-white/10 transition flex items-center">
+                <User className="w-4 h-4 mr-1.5 text-emerald-300" />
+                Login / Sign up
+              </Link>
               <Link href="/admin" className="px-3 py-2 rounded-md bg-white/10 hover:bg-white/20 transition text-amber-300 flex items-center border border-amber-400/30">
                 <LayoutDashboard className="w-4 h-4 mr-1.5" />
                 Admin Controls

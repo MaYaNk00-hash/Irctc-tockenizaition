@@ -14,6 +14,7 @@ function WaitingRoomContent() {
   const seatClass = searchParams.get('seatClass') || '3A';
   const travelDate = searchParams.get('travelDate') || '2026-08-26';
   const fingerprint = searchParams.get('fp') || 'fp_demo_browser';
+  const passengerCount = searchParams.get('passengers') || '1';
 
   const [ticketId, setTicketId] = useState<string>('');
   const [jwtTicket, setJwtTicket] = useState<string>('');
@@ -30,33 +31,53 @@ function WaitingRoomContent() {
   const [powSolving, setPowSolving] = useState<boolean>(false);
 
   const trainKey = `${trainId}:${seatClass}:${travelDate}`;
+  const storageKey = `tatkal.queue.${trainKey}.${fingerprint}`;
 
   useEffect(() => {
+    const savedTicket = window.localStorage.getItem(storageKey);
+    const savedSession = window.localStorage.getItem(`${storageKey}.session`);
+    if (savedTicket) {
+      setTicketId(savedTicket);
+      setJwtTicket(window.localStorage.getItem(`${storageKey}.jwt`) || '');
+      setLoading(false);
+      return;
+    }
+    if (!savedSession) {
+      window.localStorage.setItem(`${storageKey}.session`, `sess_${crypto.randomUUID()}`);
+    }
     joinWaitingRoom();
   }, []);
 
-  const joinWaitingRoom = (powNonce?: string, captchaAnswer?: number) => {
+  const joinWaitingRoom = (powNonce?: string, captchaAnswer?: number, verificationId?: string) => {
     setLoading(true);
     setError('');
 
-    const signals = searchParams.get('signals') ? JSON.parse(searchParams.get('signals')!) : undefined;
+    let signals: unknown;
+    try {
+      signals = searchParams.get('signals') ? JSON.parse(searchParams.get('signals')!) : undefined;
+    } catch {
+      signals = undefined;
+    }
+    const sessionId = window.localStorage.getItem(`${storageKey}.session`) || `sess_${crypto.randomUUID()}`;
+    window.localStorage.setItem(`${storageKey}.session`, sessionId);
 
     fetch(`${API_BASE}/waiting-room/join`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Idempotency-Key': `join_${trainKey}_${Date.now()}`
+        'Idempotency-Key': `join_${trainKey}_${fingerprint}_${verificationId || 'initial'}`
       },
       body: JSON.stringify({
         userId: 1001,
         trainId,
         seatClass,
         travelDate,
-        sessionId: 'sess_' + Math.random().toString(36).substring(7),
+        sessionId,
         fingerprint,
         signals,
         powNonce,
-        captchaAnswer
+        captchaAnswer,
+        verificationId
       })
     })
       .then((res) => res.json())
@@ -73,19 +94,15 @@ function WaitingRoomContent() {
         if (data.success) {
           setTicketId(data.data.ticketId);
           setJwtTicket(data.data.jwtTicket);
+          window.localStorage.setItem(storageKey, data.data.ticketId);
+          window.localStorage.setItem(`${storageKey}.jwt`, data.data.jwtTicket || '');
           setRequiresFriction(false);
         } else {
           setError(data.error || 'Failed to join virtual waiting room');
         }
       })
       .catch(() => {
-        setTicketId('wt_mock_' + Math.random().toString(36).substring(7));
-        setQueueStatus({
-          position: 5,
-          totalInQueue: 120,
-          estimatedWaitSeconds: 6,
-          status: 'QUEUED'
-        });
+        setError('Unable to connect to the booking service. Please retry.');
       })
       .finally(() => setLoading(false));
   };
@@ -104,42 +121,49 @@ function WaitingRoomContent() {
             if ((data.data.status === 'ADMITTED' && data.data.admissionToken) || pollCount >= 3) {
               clearInterval(interval);
               const token = data.data.admissionToken || 'adm_token_demo_123';
-              router.push(
-                `/booking?trainId=${trainId}&trainName=${encodeURIComponent(trainName)}&seatClass=${seatClass}&travelDate=${travelDate}&admissionToken=${token}`
-              );
+              router.push(`/booking?trainId=${trainId}&trainName=${encodeURIComponent(trainName)}&seatClass=${seatClass}&travelDate=${travelDate}&passengers=${passengerCount}&admissionToken=${token}`);
             }
           } else if (pollCount >= 3) {
             clearInterval(interval);
-            router.push(
-              `/booking?trainId=${trainId}&trainName=${encodeURIComponent(trainName)}&seatClass=${seatClass}&travelDate=${travelDate}&admissionToken=adm_token_demo_123`
-            );
+            setError('Admission status could not be confirmed. Please retry from the waiting room.');
           }
         })
         .catch(() => {
           clearInterval(interval);
-          router.push(
-            `/booking?trainId=${trainId}&trainName=${encodeURIComponent(trainName)}&seatClass=${seatClass}&travelDate=${travelDate}&admissionToken=adm_token_demo_123`
-          );
+          setError('Unable to confirm your admission. Please retry.');
         });
     }, 2000);
 
     return () => clearInterval(interval);
   }, [ticketId]);
 
-  const solveProofOfWork = () => {
+  const solveProofOfWork = async () => {
     if (!powChallenge) return;
     setPowSolving(true);
-
-    setTimeout(() => {
-      setPowSolving(false);
-      joinWaitingRoom('84920');
-    }, 1200);
+    const encoder = new TextEncoder();
+    let nonce = 0;
+    const target = '0'.repeat(powChallenge.targetZeros || 2);
+    while (true) {
+      const hash = await crypto.subtle.digest('SHA-256', encoder.encode(`${powChallenge.challenge}${nonce}`));
+      const hex = Array.from(new Uint8Array(hash)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+      if (hex.startsWith(target)) break;
+      nonce++;
+    }
+    setPowSolving(false);
+    joinWaitingRoom(String(nonce), undefined, powChallenge.id);
   };
 
   const handleCaptchaSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const ans = parseInt(captchaInput, 10);
-    joinWaitingRoom(undefined, ans);
+    joinWaitingRoom(undefined, ans, captchaChallenge?.id);
+  };
+
+  const leaveQueue = () => {
+    window.localStorage.removeItem(storageKey);
+    window.localStorage.removeItem(`${storageKey}.jwt`);
+    window.localStorage.removeItem(`${storageKey}.session`);
+    router.push('/');
   };
 
   return (
@@ -226,6 +250,8 @@ function WaitingRoomContent() {
           </div>
         )}
 
+        {error && <div role="alert" className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-xs font-semibold text-rose-800 flex items-center justify-between gap-3"><span>{error}</span><button onClick={() => joinWaitingRoom()} className="underline">Retry</button></div>}
+
         {!requiresFriction && (
           <div className="bg-slate-900 text-white rounded-xl p-6 text-center space-y-4 shadow-inner relative overflow-hidden">
             <div className="absolute inset-0 bg-gradient-to-r from-irctc-navy/40 to-transparent pointer-events-none" />
@@ -255,11 +281,12 @@ function WaitingRoomContent() {
                   Live Batch Stream Active
                 </span>
               </div>
-              <button
-                onClick={() => router.push(`/booking?trainId=${trainId}&trainName=${encodeURIComponent(trainName)}&seatClass=${seatClass}&travelDate=${travelDate}&admissionToken=${queueStatus?.admissionToken || 'adm_token_demo_123'}`)}
+              {queueStatus?.status === 'ADMITTED' && queueStatus.admissionToken ? <button
+                onClick={() => router.push(`/booking?trainId=${trainId}&trainName=${encodeURIComponent(trainName)}&seatClass=${seatClass}&travelDate=${travelDate}&passengers=${passengerCount}&admissionToken=${queueStatus.admissionToken}`)}
                 className="w-full bg-irctc-orange hover:bg-irctc-darkorange text-white text-xs font-bold py-2.5 rounded-lg transition shadow-md flex items-center justify-center mt-1"
-              >
-                Proceed to Seat Reservation <ArrowRight className="w-4 h-4 ml-1.5" />
+              >Proceed to Seat Reservation <ArrowRight className="w-4 h-4 ml-1.5" /></button> : <p className="text-slate-300">Please wait for your batch to be admitted. Refreshing does not improve your position.</p>}
+              <button onClick={leaveQueue} className="text-slate-300 hover:text-white underline underline-offset-2">
+                Leave queue
               </button>
             </div>
           </div>

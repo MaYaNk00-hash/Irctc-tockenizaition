@@ -12,6 +12,7 @@ export interface BookingJob {
   passengerNames: string[];
   admissionToken: string;
   timestamp: number;
+  selectedSeats?: string[];
 }
 
 export interface JobResult {
@@ -83,6 +84,11 @@ export class PartitionedSchedulerService {
    * 4. Hand off to Seat Lock Service or Reject SEATS_EXHAUSTED
    */
   public static async processJob(job: BookingJob): Promise<JobResult> {
+    // Explicit seat selections are handled by the demo seat service, which is also
+    // the source of truth in offline prototype mode.
+    if (job.selectedSeats?.length) {
+      return SeatLockService.reserveSelectedSeats(job);
+    }
     let client: any = null;
     try {
       client = await pool.connect();

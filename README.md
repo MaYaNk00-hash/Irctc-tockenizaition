@@ -92,6 +92,18 @@ Executes test suites for Bot Risk Scoring & Seat Lock TTL Expiry Reconciliation.
 
 ---
 
+## Prototype scope and demo flow
+
+**This project is a hackathon prototype and is not connected to IRCTC production systems, real railway inventory, real payment gateways, or a production CAPTCHA provider.** Train inventory, payments, verification challenges, and load figures are simulated locally to demonstrate the proposed fair-booking design.
+
+Passenger flow: Search a mock route → join the fair waiting room once → receive a short-lived admission token → enter passenger details and choose available seats → hold those seats for two minutes → complete a sandbox payment → view the PNR and audit trail.
+
+The demo includes real in-process rules for selected-seat locks, lock expiry/release, one-time admission tokens, server-verified proof-of-work, idempotent API responses, and late-payment refund transitions. `/admin` includes a clearly labelled **DEMO SIMULATION** of 10,000 requests; it updates backend demo metrics without generating external traffic.
+
+For a judge demo: complete one normal booking, use the payment switcher for late payment, then open `/admin` and run the demo simulation. The login/sign-up screen is browser-local mock access only.
+
+---
+
 ## 📋 Scenarios Walkthrough
 
 1. **Normal Flow**: Search train -> Join Waiting Room -> Batch admission -> Lock seats -> Process payment -> PNR issue & Audit log.

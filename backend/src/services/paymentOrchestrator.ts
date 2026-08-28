@@ -42,7 +42,8 @@ export class PaymentOrchestratorService {
 
     // 2. Handle DELAYED_LATE_SUCCESS simulation (explicit edge case)
     if (mode === 'DELAYED_LATE_SUCCESS') {
-      // Artificially expire the token for demo testing if it wasn't expired yet
+      // Force the expiry edge case in demo mode and release inventory first.
+      SeatLockService.releaseLock(req.tokenId, 'EXPIRED');
       tokenRecord.status = 'EXPIRED';
       try {
         await pool.query(`UPDATE seat_tokens SET status = 'EXPIRED' WHERE token_id = $1`, [req.tokenId]);
@@ -63,6 +64,7 @@ export class PaymentOrchestratorService {
 
     // 4. Evaluate Gateway Result
     if (mode === 'FAILED') {
+      SeatLockService.releaseLock(req.tokenId, 'PAYMENT_FAILED');
       await this.recordTransaction(txnId, req.tokenId, req.amount, 'FAILED');
       await AuditService.logStatus(
         req.tokenId,

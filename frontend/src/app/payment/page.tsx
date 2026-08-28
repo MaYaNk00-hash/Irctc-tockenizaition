@@ -39,7 +39,7 @@ function PaymentContent() {
       .then((data) => {
         if (data.success) {
           setResult(data.data);
-          setTimeout(() => {
+          if (data.data.status === 'CONFIRMED') setTimeout(() => {
             router.push(`/history?tokenId=${tokenId}`);
           }, 2500);
         }
@@ -65,9 +65,6 @@ function PaymentContent() {
             auditReason: 'Payment succeeded within valid TTL window.'
           });
         }
-        setTimeout(() => {
-          router.push(`/history?tokenId=${tokenId}`);
-        }, 2500);
       })
       .finally(() => setProcessing(false));
   };
@@ -90,11 +87,10 @@ function PaymentContent() {
           <button
             type="button"
             onClick={() => setSimulatedMode('SUCCESS')}
-            className={`p-2.5 rounded-lg border text-left text-xs font-bold transition ${
-              simulatedMode === 'SUCCESS'
+            className={`p-2.5 rounded-lg border text-left text-xs font-bold transition ${simulatedMode === 'SUCCESS'
                 ? 'bg-emerald-600 text-white border-emerald-600 shadow'
                 : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-            }`}
+              }`}
           >
             <div>1. Normal Success</div>
             <div className="text-[10px] font-normal opacity-90">Valid TTL → Instant PNR</div>
@@ -103,11 +99,10 @@ function PaymentContent() {
           <button
             type="button"
             onClick={() => setSimulatedMode('FAILED')}
-            className={`p-2.5 rounded-lg border text-left text-xs font-bold transition ${
-              simulatedMode === 'FAILED'
+            className={`p-2.5 rounded-lg border text-left text-xs font-bold transition ${simulatedMode === 'FAILED'
                 ? 'bg-rose-600 text-white border-rose-600 shadow'
                 : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-            }`}
+              }`}
           >
             <div>2. Bank Decline</div>
             <div className="text-[10px] font-normal opacity-90">Gateway failure</div>
@@ -116,11 +111,10 @@ function PaymentContent() {
           <button
             type="button"
             onClick={() => setSimulatedMode('DELAYED_LATE_SUCCESS')}
-            className={`p-2.5 rounded-lg border text-left text-xs font-bold transition ${
-              simulatedMode === 'DELAYED_LATE_SUCCESS'
+            className={`p-2.5 rounded-lg border text-left text-xs font-bold transition ${simulatedMode === 'DELAYED_LATE_SUCCESS'
                 ? 'bg-purple-600 text-white border-purple-600 shadow ring-2 ring-purple-300'
                 : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-            }`}
+              }`}
           >
             <div>3. Late Success Edge Case</div>
             <div className="text-[10px] font-normal opacity-90">Auto-refund demo</div>
@@ -146,9 +140,8 @@ function PaymentContent() {
             <button
               type="button"
               onClick={() => setPaymentMode('UPI')}
-              className={`p-3 rounded-lg border text-center text-xs font-bold transition ${
-                paymentMode === 'UPI' ? 'border-irctc-navy bg-blue-50 text-irctc-navy' : 'border-slate-200 text-slate-600'
-              }`}
+              className={`p-3 rounded-lg border text-center text-xs font-bold transition ${paymentMode === 'UPI' ? 'border-irctc-navy bg-blue-50 text-irctc-navy' : 'border-slate-200 text-slate-600'
+                }`}
             >
               BHIM / UPI
             </button>
@@ -156,9 +149,8 @@ function PaymentContent() {
             <button
               type="button"
               onClick={() => setPaymentMode('NET_BANKING')}
-              className={`p-3 rounded-lg border text-center text-xs font-bold transition ${
-                paymentMode === 'NET_BANKING' ? 'border-irctc-navy bg-blue-50 text-irctc-navy' : 'border-slate-200 text-slate-600'
-              }`}
+              className={`p-3 rounded-lg border text-center text-xs font-bold transition ${paymentMode === 'NET_BANKING' ? 'border-irctc-navy bg-blue-50 text-irctc-navy' : 'border-slate-200 text-slate-600'
+                }`}
             >
               Net Banking
             </button>
@@ -166,9 +158,8 @@ function PaymentContent() {
             <button
               type="button"
               onClick={() => setPaymentMode('CREDIT_CARD')}
-              className={`p-3 rounded-lg border text-center text-xs font-bold transition ${
-                paymentMode === 'CREDIT_CARD' ? 'border-irctc-navy bg-blue-50 text-irctc-navy' : 'border-slate-200 text-slate-600'
-              }`}
+              className={`p-3 rounded-lg border text-center text-xs font-bold transition ${paymentMode === 'CREDIT_CARD' ? 'border-irctc-navy bg-blue-50 text-irctc-navy' : 'border-slate-200 text-slate-600'
+                }`}
             >
               Credit/Debit Card
             </button>
@@ -176,13 +167,12 @@ function PaymentContent() {
         </div>
 
         {result && (
-          <div className={`p-4 rounded-xl text-xs font-semibold space-y-1 ${
-            result.status === 'CONFIRMED'
+          <div className={`p-4 rounded-xl text-xs font-semibold space-y-1 ${result.status === 'CONFIRMED'
               ? 'bg-emerald-50 text-emerald-950 border border-emerald-300'
               : result.status === 'REFUND_COMPLETED'
-              ? 'bg-purple-50 text-purple-950 border border-purple-300'
-              : 'bg-rose-50 text-rose-950 border border-rose-300'
-          }`}>
+                ? 'bg-purple-50 text-purple-950 border border-purple-300'
+                : 'bg-rose-50 text-rose-950 border border-rose-300'
+            }`}>
             <div className="font-bold flex items-center text-sm">
               {result.status === 'CONFIRMED' && <CheckCircle2 className="w-5 h-5 mr-2 text-emerald-600" />}
               {result.status === 'REFUND_COMPLETED' && <RefreshCw className="w-5 h-5 mr-2 text-purple-600 animate-spin" />}

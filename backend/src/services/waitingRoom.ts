@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { pool, redis } from '../db';
-import { BotDetectionService, BehavioralSignals } from './botDetection';
+import { BotDetectionService, BehavioralSignals, verifyProofOfWork } from './botDetection';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'tatkal_secret_key_2026';
 
@@ -15,6 +15,7 @@ export interface JoinRequest {
   signals?: BehavioralSignals;
   powNonce?: string;
   captchaAnswer?: number;
+  verificationId?: string;
 }
 
 export interface WaitingRoomStatus {
@@ -41,7 +42,8 @@ interface InMemTicket {
 
 const memoryPool: Map<string, InMemTicket[]> = new Map();
 const memorySecondaryFifo: Map<string, InMemTicket[]> = new Map();
-const memoryAdmittedTokens: Map<string, { userId: number; trainKey: string; expiresAt: number }> = new Map();
+const memoryAdmittedTokens: Map<string, { userId: number; trainKey: string; expiresAt: number; consumed: boolean }> = new Map();
+const verificationChallenges = new Map<string, { id: string; type: 'POW' | 'CAPTCHA'; challenge?: string; targetZeros?: number; answer?: number; expiresAt: number }>();
 const memoryTickets: Map<string, InMemTicket> = new Map();
 const activeTrainKeys: Set<string> = new Set();
 let isWindowFrozen = false;
@@ -51,7 +53,7 @@ let batchCounter = 0;
 export let waitingRoomConfig = {
   batchSize: 10,
   batchIntervalMs: 3000,
-  admissionTtlSeconds: 90,
+  admissionTtlSeconds: 300,
   windowOpened: true, // true by default for demo
 };
 
@@ -80,8 +82,21 @@ export class WaitingRoomService {
       req.signals
     );
 
-    // If friction is required, check if client provided solution
-    if (risk.friction === 'MEDIUM_POW' && !req.powNonce) {
+    if (risk.friction !== 'NONE') {
+      const existing = verificationChallenges.get(req.sessionId);
+      const challenge = existing && existing.expiresAt > Date.now() ? existing : this.createChallenge(req.sessionId, risk.friction);
+      const valid = challenge.type === 'POW'
+        ? Boolean(req.powNonce && req.verificationId === challenge.id && verifyProofOfWork(challenge.challenge!, req.powNonce, challenge.targetZeros))
+        : Boolean(req.captchaAnswer === challenge.answer && req.verificationId === challenge.id);
+      if (!valid) {
+        return { ticketId: '', jwtTicket: '', riskScore: risk.score, friction: risk.friction,
+          powChallenge: challenge.type === 'POW' ? { id: challenge.id, challenge: challenge.challenge, targetZeros: challenge.targetZeros } : undefined,
+          captchaChallenge: challenge.type === 'CAPTCHA' ? { id: challenge.id, question: 'Verification required: What is 7 + 7?' } : undefined };
+      }
+      verificationChallenges.delete(req.sessionId);
+    }
+
+    /*if (risk.friction === 'MEDIUM_POW' && !req.powNonce) {
       return {
         ticketId: '',
         jwtTicket: '',
@@ -89,7 +104,7 @@ export class WaitingRoomService {
         friction: risk.friction,
         powChallenge: risk.powChallenge
       };
-    }
+    }*/
 
     if (risk.friction === 'HIGH_CAPTCHA' && req.captchaAnswer === undefined) {
       return {
@@ -294,7 +309,7 @@ export class WaitingRoomService {
         memoryAdmittedTokens.set(item.admissionToken, {
           userId: item.userId,
           trainKey,
-          expiresAt: Date.now() + waitingRoomConfig.admissionTtlSeconds * 1000
+          expiresAt: Date.now() + waitingRoomConfig.admissionTtlSeconds * 1000, consumed: false
         });
         admittedCount++;
       }
@@ -319,7 +334,7 @@ export class WaitingRoomService {
       memItem.batchNumber = batchNumber;
       memItem.admissionToken = admissionToken;
     }
-    memoryAdmittedTokens.set(admissionToken, { userId, trainKey, expiresAt });
+    memoryAdmittedTokens.set(admissionToken, { userId, trainKey, expiresAt, consumed: false });
 
     if (redis.status === 'ready') {
       try {
@@ -339,23 +354,24 @@ export class WaitingRoomService {
     }
   }
 
-  public static async validateAdmissionToken(admissionToken: string): Promise<boolean> {
-    if (!admissionToken) return false;
-    if (admissionToken.startsWith('adm_token_')) return true;
-
-    if (redis.status === 'ready') {
-      try {
-        const exists = await redis.exists(`admission_token:${admissionToken}`);
-        if (exists) return true;
-      } catch {
-        // Fallback below
-      }
-    }
-
+  public static async consumeAdmissionToken(admissionToken: string, userId: number, trainId: string, seatClass: string, travelDate: string): Promise<boolean> {
+    if (!this.isAdmissionTokenValid(admissionToken, userId, trainId, seatClass, travelDate)) return false;
     const item = memoryAdmittedTokens.get(admissionToken);
-    if (item && item.expiresAt > Date.now()) return true;
-
-    // Fallback: Accept any non-empty admission token in demo/offline mode
+    item!.consumed = true;
     return true;
+  }
+
+  public static isAdmissionTokenValid(admissionToken: string, userId: number, trainId: string, seatClass: string, travelDate: string): boolean {
+    const item = memoryAdmittedTokens.get(admissionToken);
+    return Boolean(item && !item.consumed && item.expiresAt > Date.now() && item.userId === userId && item.trainKey === this.getTrainKey(trainId, seatClass, travelDate));
+  }
+
+  private static createChallenge(sessionId: string, friction: string) {
+    const highRisk = friction === 'HIGH_CAPTCHA' || friction === 'VERY_HIGH_SOFT_BLOCK';
+    const challenge = highRisk
+      ? { id: crypto.randomUUID(), type: 'CAPTCHA' as const, answer: 14, expiresAt: Date.now() + 120000 }
+      : { id: crypto.randomUUID(), type: 'POW' as const, challenge: crypto.randomBytes(12).toString('hex'), targetZeros: 2, expiresAt: Date.now() + 120000 };
+    verificationChallenges.set(sessionId, challenge);
+    return challenge;
   }
 }

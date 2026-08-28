@@ -10,13 +10,72 @@ export interface SeatTokenRecord {
   status: 'RESERVED' | 'PAYMENT_PROCESSING' | 'CONFIRMED' | 'EXPIRED' | 'PAYMENT_FAILED' | 'REFUND_INITIATED' | 'REFUND_COMPLETED';
   expiresAt: Date;
   pnr?: string;
+  inventoryKey?: string;
+  seatCount?: number;
+  trainId?: string;
+  seatClass?: string;
+  travelDate?: string;
+  passengerNames?: string[];
+  seatNumbers?: string[];
 }
 
 // In-memory token store fallback
 const memoryTokens: Map<string, SeatTokenRecord> = new Map();
 const memoryInventorySeats: Map<string, number> = new Map(); // key -> available count
+const memorySeatLocks: Map<string, Map<string, string>> = new Map(); // inventory key -> seat -> token
+
+const coachForClass = (seatClass: string) => seatClass === '1A' ? 'H1' : seatClass === '2A' ? 'A1' : seatClass === '3A' ? 'B2' : seatClass === 'CC' || seatClass === 'EC' ? 'C1' : 'S4';
+const inventoryKeyFor = (trainId: string, seatClass: string, travelDate: string) => `${trainId}:${seatClass}:${travelDate}`;
 
 export class SeatLockService {
+  public static releaseLock(tokenId: string, status: 'EXPIRED' | 'PAYMENT_FAILED' = 'EXPIRED'): boolean {
+    const record = memoryTokens.get(tokenId);
+    if (!record || record.status === 'CONFIRMED' || record.status === 'REFUND_COMPLETED') return false;
+    const fromStatus = record.status;
+    record.status = status;
+    if (record.inventoryKey) {
+      const locks = memorySeatLocks.get(record.inventoryKey);
+      record.seatNumbers?.forEach(seat => locks?.delete(seat));
+      const available = memoryInventorySeats.get(record.inventoryKey) || 0;
+      memoryInventorySeats.set(record.inventoryKey, available + (record.seatCount || 1));
+    }
+    AuditService.logStatus(tokenId, fromStatus, status, status === 'EXPIRED' ? 'Seat lock expired and the selected seat was released.' : 'Payment failed and the selected seat was released.');
+    return true;
+  }
+  public static getSeatMap(trainId: string, seatClass: string, travelDate: string) {
+    const key = inventoryKeyFor(trainId, seatClass, travelDate);
+    const locks = memorySeatLocks.get(key) || new Map<string, string>();
+    const coach = coachForClass(seatClass);
+    const seats = Array.from({ length: 40 }, (_, index) => {
+      const number = `${coach}-${String(index + 1).padStart(2, '0')}`;
+      const tokenId = locks.get(number);
+      const token = tokenId ? memoryTokens.get(tokenId) : undefined;
+      const occupied = index === 6 || index === 19 || index === 31;
+      return { number, state: occupied ? 'OCCUPIED' : token && token.status === 'RESERVED' ? 'LOCKED' : 'AVAILABLE' };
+    });
+    return { coach, seats, available: seats.filter(seat => seat.state === 'AVAILABLE').length };
+  }
+
+  public static reserveSelectedSeats(job: BookingJob): JobResult {
+    const key = inventoryKeyFor(job.trainId, job.seatClass, job.travelDate);
+    const requested = Math.max(job.passengerNames.length, 1);
+    const selectedSeats = job.selectedSeats || [];
+    if (selectedSeats.length !== requested) return { jobId: job.jobId, status: 'FAILED', reason: 'Select one available seat for each passenger.' };
+    const map = this.getSeatMap(job.trainId, job.seatClass, job.travelDate);
+    const available = new Set(map.seats.filter(seat => seat.state === 'AVAILABLE').map(seat => seat.number));
+    if (new Set(selectedSeats).size !== selectedSeats.length || selectedSeats.some(seat => !available.has(seat))) {
+      return { jobId: job.jobId, status: 'SEATS_EXHAUSTED', reason: 'One or more selected seats are no longer available.' };
+    }
+    const tokenId = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
+    const locks = memorySeatLocks.get(key) || new Map<string, string>();
+    selectedSeats.forEach(seat => locks.set(seat, tokenId));
+    memorySeatLocks.set(key, locks);
+    memoryInventorySeats.set(key, map.available - selectedSeats.length);
+    memoryTokens.set(tokenId, { tokenId, userId: job.userId, inventoryId: 1, status: 'RESERVED', expiresAt, inventoryKey: key, seatCount: selectedSeats.length, trainId: job.trainId, seatClass: job.seatClass, travelDate: job.travelDate, passengerNames: job.passengerNames, seatNumbers: selectedSeats });
+    AuditService.logStatus(tokenId, 'ADMITTED', 'SEAT_LOCKED', `Temporarily reserved ${selectedSeats.join(', ')} for ${requested} passenger(s).`);
+    return { jobId: job.jobId, status: 'RESERVED', tokenId, expiresAt: expiresAt.toISOString() };
+  }
   /**
    * Register fast TTL lock in Redis + Postgres
    */
@@ -94,7 +153,13 @@ export class SeatLockService {
       userId: job.userId,
       inventoryId: 1,
       status: 'RESERVED',
-      expiresAt
+      expiresAt,
+      inventoryKey: key,
+      seatCount: requested,
+      trainId: job.trainId,
+      seatClass: job.seatClass,
+      travelDate: job.travelDate,
+      passengerNames: job.passengerNames
     };
 
     memoryTokens.set(tokenId, tokenRecord);
@@ -164,15 +229,7 @@ export class SeatLockService {
       const now = new Date();
       for (const [tokenId, record] of memoryTokens.entries()) {
         if ((record.status === 'RESERVED' || record.status === 'PAYMENT_PROCESSING') && record.expiresAt < now) {
-          const fromStatus = record.status;
-          record.status = 'EXPIRED';
-          AuditService.logStatus(
-            tokenId,
-            fromStatus,
-            'EXPIRED',
-            `Seat lock TTL expired. Reclaimed seat(s) back to inventory.`
-          );
-          expiredCount++;
+          if (this.releaseLock(tokenId, 'EXPIRED')) expiredCount++;
         }
       }
     }

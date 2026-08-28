@@ -1,4 +1,5 @@
 import { BotDetectionService, verifyProofOfWork } from '../services/botDetection';
+import { WaitingRoomService } from '../services/waitingRoom';
 
 describe('Bot Detection & Mitigation Layer Tests', () => {
   it('should score legitimate human sessions low (< 30) with no friction', async () => {
@@ -60,5 +61,18 @@ describe('Bot Detection & Mitigation Layer Tests', () => {
 
     expect(verifyProofOfWork(challenge, foundNonce, 2)).toBe(true);
     expect(verifyProofOfWork(challenge, 'invalid_nonce_xyz', 2)).toBe(false);
+  });
+
+  it('rejects an invalid server-issued proof and accepts a valid one', async () => {
+    const request = { userId: 3001, trainId: '12002', seatClass: 'CC', travelDate: '2026-09-02', sessionId: 'pow_validation_qa', fingerprint: 'fp_pow_validation_123', signals: { timeToFirstInteractionMs: 1, keystrokeVarianceMs: 50, mouseEntropy: 0, navigatedFromSearch: true } };
+    const challenge = await WaitingRoomService.join(request, '127.0.0.1');
+    expect(challenge.ticketId).toBe('');
+    expect(challenge.powChallenge).toBeDefined();
+    const invalid = await WaitingRoomService.join({ ...request, powNonce: 'invalid', verificationId: challenge.powChallenge.id }, '127.0.0.1');
+    expect(invalid.ticketId).toBe('');
+    let nonce = 0;
+    while (!verifyProofOfWork(challenge.powChallenge.challenge, String(nonce), challenge.powChallenge.targetZeros)) nonce++;
+    const accepted = await WaitingRoomService.join({ ...request, powNonce: String(nonce), verificationId: challenge.powChallenge.id }, '127.0.0.1');
+    expect(accepted.ticketId).not.toBe('');
   });
 });

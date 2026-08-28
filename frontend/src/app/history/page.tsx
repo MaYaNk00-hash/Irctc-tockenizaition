@@ -21,8 +21,10 @@ function HistoryContent() {
   const [logs, setLogs] = useState<AuditItem[]>([]);
   const [tokenStatus, setTokenStatus] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [booking, setBooking] = useState<any>(null);
 
   useEffect(() => {
+    try { setBooking(JSON.parse(window.localStorage.getItem(`tatkal.booking.${tokenId}`) || 'null')); } catch { setBooking(null); }
     Promise.all([
       fetch(`${API_BASE}/booking/status/${tokenId}`).then(res => res.json()).catch(() => null),
       fetch(`${API_BASE}/api/booking/audit/${tokenId}`).then(res => res.json()).catch(() => null)
@@ -96,9 +98,9 @@ function HistoryContent() {
         <div className="flex justify-between items-start border-b pb-4">
           <div>
             <span className="text-xs font-mono text-slate-500">BOOKING AUDIT RECORD</span>
-            <h1 className="text-xl font-bold text-irctc-navy mt-0.5">Bhopal Shatabdi Express (#12002)</h1>
+            <h1 className="text-xl font-bold text-irctc-navy mt-0.5">{booking?.trainName || tokenStatus?.trainId || 'Tatkal Booking'}</h1>
             <p className="text-xs text-slate-500">
-              Seat Class: <strong>3A</strong> • Date: <strong>2026-08-26</strong>
+              Seat Class: <strong>{booking?.seatClass || tokenStatus?.seatClass || '—'}</strong> • Date: <strong>{booking?.travelDate || tokenStatus?.travelDate || '—'}</strong>
             </p>
           </div>
           <div className="text-right">
@@ -114,11 +116,11 @@ function HistoryContent() {
         <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
           <div>
             <span className="text-slate-500 block">Passenger Name</span>
-            <span className="font-bold text-slate-800">Mayank Kumar</span>
+            <span className="font-bold text-slate-800">{booking?.passengers?.map((passenger: any) => passenger.name).join(', ') || tokenStatus?.passengerNames?.join(', ') || '—'}</span>
           </div>
           <div>
             <span className="text-slate-500 block">Seat / Berth</span>
-            <span className="font-bold text-irctc-navy">Coach B2, Seat 45 (LB)</span>
+            <span className="font-bold text-irctc-navy">{booking?.selectedSeats?.join(', ') || tokenStatus?.seatNumbers?.join(', ') || '—'}</span>
           </div>
           <div>
             <span className="text-slate-500 block">Booking Quota</span>
@@ -126,7 +128,7 @@ function HistoryContent() {
           </div>
           <div>
             <span className="text-slate-500 block">Fare Paid</span>
-            <span className="font-bold text-slate-800 font-mono">₹1,450.00</span>
+            <span className="font-bold text-slate-800 font-mono">₹{booking?.amount || '—'}</span>
           </div>
         </div>
       </div>
