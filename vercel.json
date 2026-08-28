@@ -8,8 +8,7 @@
     "backend": {
       "root": "backend",
       "framework": "express",
-      "entrypoint": "src/server.ts",
-      "maxDuration": 60
+      "entrypoint": "src/server.ts"
     }
   },
   "rewrites": [
