@@ -1,5 +1,16 @@
 -- Database Schema for Tatkal Fair-Booking System
 
+CREATE TABLE IF NOT EXISTS app_users (
+    id BIGSERIAL PRIMARY KEY,
+    display_name TEXT NOT NULL CHECK (char_length(display_name) BETWEEN 1 AND 120),
+    login_identifier TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS app_users_login_identifier_idx ON app_users (login_identifier);
+
 CREATE TABLE IF NOT EXISTS seat_inventory (
     id BIGSERIAL PRIMARY KEY,
     train_id TEXT NOT NULL,
@@ -67,3 +78,8 @@ CREATE TABLE IF NOT EXISTS risk_scores (
     friction_applied TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE status_audit_log
+    ADD COLUMN IF NOT EXISTS ticket_id UUID REFERENCES waiting_room_tickets(ticket_id);
+
+CREATE INDEX IF NOT EXISTS status_audit_log_ticket_idx ON status_audit_log(ticket_id, created_at);

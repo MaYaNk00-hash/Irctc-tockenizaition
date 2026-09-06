@@ -48,7 +48,7 @@ export default function RootLayout({
             <BrandLink />
 
             <nav className="hidden md:flex items-center space-x-1 text-sm font-medium">
-              <Link href="/landing" className="px-3 py-2 rounded-md hover:bg-white/10 transition">Home</Link>
+              <Link href="/search" className="px-3 py-2 rounded-md hover:bg-white/10 transition">Home</Link>
               <Link href="/search" className="px-3 py-2 rounded-md hover:bg-white/10 transition flex items-center">
                 <Search className="w-4 h-4 mr-1.5 text-orange-400" />
                 Search Trains

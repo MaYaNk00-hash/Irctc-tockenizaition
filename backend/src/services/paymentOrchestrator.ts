@@ -40,20 +40,14 @@ export class PaymentOrchestratorService {
       };
     }
 
-    // 2. Handle DELAYED_LATE_SUCCESS simulation (explicit edge case)
-    if (mode === 'DELAYED_LATE_SUCCESS') {
-      // Force the expiry edge case in demo mode and release inventory first.
-      SeatLockService.releaseLock(req.tokenId, 'EXPIRED');
-      tokenRecord.status = 'EXPIRED';
-      try {
-        await pool.query(`UPDATE seat_tokens SET status = 'EXPIRED' WHERE token_id = $1`, [req.tokenId]);
-      } catch {
-        // Handled in memory
-      }
-    }
-
-    // 3. Update token to PAYMENT_PROCESSING
+    // 2. Persist the payment attempt before evaluating the mock gateway.
     if (tokenRecord.status === 'RESERVED') {
+      tokenRecord.status = 'PAYMENT_PROCESSING';
+      try {
+        await pool.query(`UPDATE seat_tokens SET status = 'PAYMENT_PROCESSING' WHERE token_id = $1 AND status = 'RESERVED'`, [req.tokenId]);
+      } catch {
+        // The in-memory token remains authoritative in offline test mode.
+      }
       await AuditService.logStatus(
         req.tokenId,
         'RESERVED',
@@ -62,16 +56,19 @@ export class PaymentOrchestratorService {
       );
     }
 
+    // 3. Handle DELAYED_LATE_SUCCESS simulation (explicit edge case)
+    if (mode === 'DELAYED_LATE_SUCCESS') {
+      // Force the expiry edge case in demo mode and release inventory first.
+      await SeatLockService.releaseLockDistributed(req.tokenId, 'EXPIRED');
+      tokenRecord.status = 'EXPIRED';
+      try { await pool.query(`UPDATE seat_tokens SET status = 'EXPIRED' WHERE token_id = $1`, [req.tokenId]); } catch { /* offline token state is already updated */ }
+    }
+
     // 4. Evaluate Gateway Result
     if (mode === 'FAILED') {
-      SeatLockService.releaseLock(req.tokenId, 'PAYMENT_FAILED');
+      await SeatLockService.releaseLockDistributed(req.tokenId, 'PAYMENT_FAILED');
+      try { await pool.query(`UPDATE seat_tokens SET status = 'PAYMENT_FAILED' WHERE token_id = $1`, [req.tokenId]); } catch { /* offline token state is already updated */ }
       await this.recordTransaction(txnId, req.tokenId, req.amount, 'FAILED');
-      await AuditService.logStatus(
-        req.tokenId,
-        'PAYMENT_PROCESSING',
-        'PAYMENT_FAILED',
-        'Payment failed at bank gateway: Insufficient funds or user cancelled transaction.'
-      );
       return {
         txnId,
         tokenId: req.tokenId,

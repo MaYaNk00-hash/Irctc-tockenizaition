@@ -21,16 +21,6 @@ function PaymentContent() {
     window.setTimeout(() => router.push(`/history?tokenId=${tokenId}`), 2500);
   };
 
-  const completeDemoPayment = () => {
-    setResult({
-      status: 'CONFIRMED',
-      pnr: '2847193021',
-      message: 'Ticket booked successfully!',
-      auditReason: 'Demo payment succeeded within the valid booking window.'
-    });
-    goToBookingHistory();
-  };
-
   const handlePayNow = (e: React.FormEvent) => {
     e.preventDefault();
     setProcessing(true);
@@ -51,32 +41,15 @@ function PaymentContent() {
     })
       .then((res) => res.json())
       .then((data) => {
-        // The primary demo journey is intentionally reliable. A server-side
-        // lock-token expiry should not turn the selected Normal Success mode
-        // into a failed payment screen.
-        if (simulatedMode === 'SUCCESS') {
-          completeDemoPayment();
-        } else if (data.success) {
+        if (data.success) {
           setResult(data.data);
           if (data.data.status === 'CONFIRMED') goToBookingHistory();
+        } else {
+          setResult({ status: 'PAYMENT_FAILED', message: data.error || 'Payment was not completed.', auditReason: 'Backend payment request failed.' });
         }
       })
       .catch(() => {
-        if (simulatedMode === 'DELAYED_LATE_SUCCESS') {
-          setResult({
-            status: 'REFUND_COMPLETED',
-            message: 'Payment received after seat lock expired. Full refund processed automatically.',
-            auditReason: 'Late payment received post TTL expiry. Triggered automated refund system.'
-          });
-        } else if (simulatedMode === 'FAILED') {
-          setResult({
-            status: 'PAYMENT_FAILED',
-            message: 'Payment declined by bank gateway.',
-            auditReason: 'Gateway response FAILED'
-          });
-        } else {
-          completeDemoPayment();
-        }
+        setResult({ status: 'PAYMENT_FAILED', message: 'Payment service is unavailable. No booking confirmation was received.', auditReason: 'Backend payment request failed.' });
       })
       .finally(() => setProcessing(false));
   };

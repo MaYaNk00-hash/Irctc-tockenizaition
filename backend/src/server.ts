@@ -10,6 +10,7 @@ import { SeatLockService } from './services/seatLock';
 import { PaymentOrchestratorService } from './services/paymentOrchestrator';
 import { AuditService } from './services/auditService';
 import { idempotencyMiddleware } from './middleware/idempotency';
+import { AuthService, isValidIdentifier } from './services/authService';
 
 const app = express();
 const corsOrigins = process.env.CORS_ORIGIN?.split(',').map(origin => origin.trim()).filter(Boolean);
@@ -41,6 +42,36 @@ app.get('/health', (req, res) => {
   res.json({ status: 'UP', timestamp: new Date().toISOString() });
 });
 
+app.post('/api/auth/signup', async (req, res) => {
+  try {
+    const { displayName, loginIdentifier, password } = req.body || {};
+    if (typeof displayName !== 'string' || typeof loginIdentifier !== 'string' || typeof password !== 'string') {
+      return res.status(400).json({ success: false, error: 'Display name, email/mobile number, and password are required.' });
+    }
+    const session = await AuthService.signUp(displayName, loginIdentifier, password);
+    return res.status(201).json({ success: true, data: session });
+  } catch (error: any) {
+    const message = error instanceof Error ? error.message : 'Unable to create account.';
+    const status = message.includes('already exists') ? 409 : message.includes('unavailable') ? 503 : 400;
+    return res.status(status).json({ success: false, error: message });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { loginIdentifier, password } = req.body || {};
+    if (typeof loginIdentifier !== 'string' || typeof password !== 'string' || !isValidIdentifier(loginIdentifier.trim().toLowerCase())) {
+      return res.status(400).json({ success: false, error: 'Enter a valid email address or 10-digit mobile number.' });
+    }
+    const session = await AuthService.login(loginIdentifier, password);
+    return res.json({ success: true, data: session });
+  } catch (error: any) {
+    const message = error instanceof Error ? error.message : 'Unable to sign in.';
+    const status = message === 'Invalid login credentials.' ? 401 : message.includes('unavailable') ? 503 : 400;
+    return res.status(status).json({ success: false, error: message });
+  }
+});
+
 app.get('/api/trains', (req, res) => {
   res.json({ success: true, data: SEEDED_TRAINS });
 });
@@ -49,7 +80,7 @@ app.get('/api/seats', async (req, res) => {
   const { trainId, seatClass, travelDate } = req.query as Record<string, string>;
   if (!trainId || !seatClass || !travelDate) return res.status(400).json({ success: false, error: 'trainId, seatClass and travelDate are required' });
   await SeatLockService.reconcileExpiredTokens();
-  res.json({ success: true, data: SeatLockService.getSeatMap(trainId, seatClass, travelDate) });
+  res.json({ success: true, data: await SeatLockService.getSeatMapAsync(trainId, seatClass, travelDate) });
 });
 
 // 2. Virtual Waiting Room - Join
@@ -111,6 +142,9 @@ app.get('/waiting-room/status', async (req, res) => {
     // queue behaviour without requiring an always-on worker.
     await WaitingRoomService.processNextBatch(trainKey);
     const status = await WaitingRoomService.getStatus(ticketId, trainKey);
+    if (!status.found) {
+      return res.status(404).json({ success: false, error: 'Waiting-room ticket not found or expired.' });
+    }
     res.json({ success: true, data: status });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -127,9 +161,14 @@ app.post('/api/booking/book', async (req, res) => {
     }
 
     await SeatLockService.reconcileExpiredTokens();
-    const isValidToken = WaitingRoomService.isAdmissionTokenValid(admissionToken, userId || 1001, trainId, seatClass, travelDate);
+    const isValidToken = await WaitingRoomService.isAdmissionTokenValid(admissionToken, userId || 1001, trainId, seatClass, travelDate);
     if (!isValidToken) {
       return res.status(403).json({ success: false, error: 'Admission token expired or invalid.' });
+    }
+
+    const tokenClaimed = await WaitingRoomService.consumeAdmissionToken(admissionToken, userId || 1001, trainId, seatClass, travelDate);
+    if (!tokenClaimed) {
+      return res.status(409).json({ success: false, error: 'Admission token has already been used.' });
     }
 
     const job: BookingJob = {
@@ -145,7 +184,6 @@ app.post('/api/booking/book', async (req, res) => {
     };
 
     const result = await PartitionedSchedulerService.pushJob(job);
-    if (result.status === 'RESERVED') await WaitingRoomService.consumeAdmissionToken(admissionToken, userId || 1001, trainId, seatClass, travelDate);
     res.json({ success: true, data: result });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -169,8 +207,11 @@ app.get('/booking/status/:tokenId', async (req, res) => {
 // 6. Audit Trail History
 app.get('/api/booking/audit/:tokenId', async (req, res) => {
   try {
-    const history = await AuditService.getAuditHistory(req.params.tokenId);
-    res.json({ success: true, data: history });
+    const result = await AuditService.getAuditHistoryWithSource(req.params.tokenId);
+    if (result.source === 'unavailable') {
+      return res.status(503).json({ success: false, error: 'Audit storage is unavailable. Start Postgres or Redis and retry.' });
+    }
+    res.json({ success: true, data: result.entries, source: result.source });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

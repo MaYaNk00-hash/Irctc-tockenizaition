@@ -10,7 +10,18 @@ export default function BrandLink() {
   const pathname = usePathname();
 
   useEffect(() => {
-    setIsSignedIn(Boolean(window.localStorage.getItem('tatkal.mockUser')));
+    const refreshBrand = () => { try {
+      const session = JSON.parse(window.localStorage.getItem('tatkal.session') || 'null');
+      const expiresAt = session?.signedInAt && session?.expiresInSeconds ? new Date(session.signedInAt).getTime() + session.expiresInSeconds * 1000 : Infinity;
+      setIsSignedIn(Boolean(session?.token && expiresAt > Date.now()));
+    } catch { setIsSignedIn(false); } };
+    refreshBrand();
+    window.addEventListener('storage', refreshBrand);
+    window.addEventListener('tatkal-auth-change', refreshBrand);
+    return () => {
+      window.removeEventListener('storage', refreshBrand);
+      window.removeEventListener('tatkal-auth-change', refreshBrand);
+    };
   }, [pathname]);
 
   return (

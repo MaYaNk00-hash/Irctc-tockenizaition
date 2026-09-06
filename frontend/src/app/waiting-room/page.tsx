@@ -33,22 +33,30 @@ function WaitingRoomContent() {
   const trainKey = `${trainId}:${seatClass}:${travelDate}`;
   const storageKey = `tatkal.queue.${trainKey}.${fingerprint}`;
 
-  const proceedToBooking = (token = 'adm_token_demo_123') => {
+  const proceedToBooking = (token: string) => {
     router.push(`/booking?trainId=${trainId}&trainName=${encodeURIComponent(trainName)}&seatClass=${seatClass}&travelDate=${travelDate}&passengers=${passengerCount}&admissionToken=${token}`);
-  };
-
-  const completeDemoAdmission = () => {
-    setQueueStatus({ position: 1, totalInQueue: 1, estimatedWaitSeconds: 0, status: 'ADMITTED', admissionToken: 'adm_token_demo_123' });
-    window.setTimeout(() => proceedToBooking(), 800);
   };
 
   useEffect(() => {
     const savedTicket = window.localStorage.getItem(storageKey);
     const savedSession = window.localStorage.getItem(`${storageKey}.session`);
     if (savedTicket) {
-      setTicketId(savedTicket);
-      setJwtTicket(window.localStorage.getItem(`${storageKey}.jwt`) || '');
-      setLoading(false);
+      fetch(`${API_BASE}/waiting-room/status?ticketId=${savedTicket}&trainKey=${trainKey}`)
+        .then((res) => {
+          if (!res.ok) throw new Error('stale-ticket');
+          return res.json();
+        })
+        .then((data) => {
+          if (!data.success) throw new Error('stale-ticket');
+          setTicketId(savedTicket);
+          setJwtTicket(window.localStorage.getItem(`${storageKey}.jwt`) || '');
+        })
+        .catch(() => {
+          window.localStorage.removeItem(storageKey);
+          window.localStorage.removeItem(`${storageKey}.jwt`);
+          joinWaitingRoom();
+        })
+        .finally(() => setLoading(false));
       return;
     }
     if (!savedSession) {
@@ -61,11 +69,17 @@ function WaitingRoomContent() {
     setLoading(true);
     setError('');
 
-    let signals: unknown;
+    let signals: unknown = {
+      timeToFirstInteractionMs: 1200,
+      keystrokeVarianceMs: 35,
+      mouseEntropy: 0.8,
+      navigatedFromSearch: true
+    };
     try {
-      signals = searchParams.get('signals') ? JSON.parse(searchParams.get('signals')!) : undefined;
+      const encodedSignals = searchParams.get('signals');
+      if (encodedSignals) signals = JSON.parse(encodedSignals);
     } catch {
-      signals = undefined;
+      // Keep the normal demo-session profile when optional telemetry is malformed.
     }
     const sessionId = window.localStorage.getItem(`${storageKey}.session`) || `sess_${crypto.randomUUID()}`;
     window.localStorage.setItem(`${storageKey}.session`, sessionId);
@@ -107,12 +121,10 @@ function WaitingRoomContent() {
           window.localStorage.setItem(`${storageKey}.jwt`, data.data.jwtTicket || '');
           setRequiresFriction(false);
         } else {
-          completeDemoAdmission();
+          setError(data.error || 'Waiting-room admission was not completed.');
         }
       })
-      .catch(() => {
-        completeDemoAdmission();
-      })
+      .catch(() => setError('Waiting-room service is unavailable. Check the backend connection and try again.'))
       .finally(() => setLoading(false));
   };
 
@@ -127,19 +139,18 @@ function WaitingRoomContent() {
         .then((data) => {
           if (data.success) {
             setQueueStatus(data.data);
-            if ((data.data.status === 'ADMITTED' && data.data.admissionToken) || pollCount >= 3) {
+            if (data.data.status === 'ADMITTED' && data.data.admissionToken) {
               clearInterval(interval);
-              const token = data.data.admissionToken || 'adm_token_demo_123';
-              proceedToBooking(token);
+              proceedToBooking(data.data.admissionToken);
             }
           } else if (pollCount >= 3) {
             clearInterval(interval);
-            proceedToBooking();
+            setError(data.error || 'Waiting-room status could not be retrieved.');
           }
         })
         .catch(() => {
           clearInterval(interval);
-          proceedToBooking();
+          setError('Waiting-room status is unavailable. Check the backend connection and try again.');
         });
     }, 2000);
 

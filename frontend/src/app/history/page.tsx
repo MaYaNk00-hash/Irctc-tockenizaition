@@ -22,6 +22,8 @@ function HistoryContent() {
   const [tokenStatus, setTokenStatus] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [booking, setBooking] = useState<any>(null);
+  const [error, setError] = useState<string>('');
+  const [source, setSource] = useState<string>('');
 
   useEffect(() => {
     try { setBooking(JSON.parse(window.localStorage.getItem(`tatkal.booking.${tokenId}`) || 'null')); } catch { setBooking(null); }
@@ -33,54 +35,16 @@ function HistoryContent() {
         if (statusRes && statusRes.success) setTokenStatus(statusRes.data);
         if (auditRes && auditRes.success && Array.isArray(auditRes.data) && auditRes.data.length > 0) {
           setLogs(auditRes.data);
+          setSource(auditRes.source || 'postgres');
         } else {
-          // A confirmed mock booking can legitimately have no server audit rows
-          // (for example after an offline demo payment). Keep the timeline useful.
-          setFallbackLogs();
+          setError(auditRes?.error || 'No audit transitions were recorded for this booking.');
         }
       })
-      .catch(() => setFallbackLogs())
+      .catch(() => setError('Booking history is unavailable. Check the backend connection and try again.'))
       .finally(() => setLoading(false));
   }, [tokenId]);
 
-  const setFallbackLogs = () => {
-    setLogs([
-      {
-        tokenId,
-        fromStatus: 'QUEUED',
-        toStatus: 'ADMITTED',
-        reason: 'Admitted from Virtual Waiting Room batch shuffle pool.',
-        createdAt: new Date(Date.now() - 120000).toISOString()
-      },
-      {
-        tokenId,
-        fromStatus: 'ADMITTED',
-        toStatus: 'RESERVED',
-        reason: 'Partitioned Scheduler locked inventory row via SELECT ... FOR UPDATE. Seat Coach B2-45 assigned.',
-        createdAt: new Date(Date.now() - 90000).toISOString()
-      },
-      {
-        tokenId,
-        fromStatus: 'RESERVED',
-        toStatus: 'PAYMENT_PROCESSING',
-        reason: 'User initiated ₹1450.00 payment via UPI.',
-        createdAt: new Date(Date.now() - 60000).toISOString()
-      },
-      {
-        tokenId,
-        fromStatus: 'PAYMENT_PROCESSING',
-        toStatus: 'CONFIRMED',
-        reason: 'Payment confirmed within 5-minute TTL window! 10-Digit Tatkal PNR 2847193021 issued.',
-        createdAt: new Date(Date.now() - 10000).toISOString()
-      }
-    ]);
-
-    setTokenStatus({
-      tokenId,
-      status: 'CONFIRMED',
-      pnr: '2847193021'
-    });
-  };
+  const retryAudit = () => window.location.reload();
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -109,7 +73,7 @@ function HistoryContent() {
             </p>
           </div>
           <div className="text-right">
-            {getStatusBadge(tokenStatus?.status || 'CONFIRMED')}
+            {tokenStatus?.status && getStatusBadge(tokenStatus.status)}
             {tokenStatus?.pnr && (
               <div className="text-lg font-black text-irctc-navy font-mono mt-1">
                 PNR: {tokenStatus.pnr}
@@ -144,8 +108,10 @@ function HistoryContent() {
             <FileText className="w-5 h-5 text-irctc-orange" />
             <span>"Why Did This Happen?" — State Machine Audit Trail</span>
           </div>
-          <span className="text-xs text-slate-500 font-mono">Persisted in status_audit_log</span>
+          <span className="text-xs text-slate-500 font-mono">{source ? `Persisted in ${source === 'postgres' ? 'status_audit_log' : source === 'redis' ? 'Redis audit store' : 'development demo audit store'}` : 'Awaiting audit storage'}</span>
         </div>
+
+        {error && <div role="alert" className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-xs font-semibold text-rose-800 flex items-center justify-between gap-3"><span>{error}</span><button type="button" onClick={retryAudit} className="underline whitespace-nowrap">Retry</button></div>}
 
         <div className="relative border-l-2 border-slate-200 ml-4 pl-6 space-y-6 py-2">
           {logs.map((log, idx) => (

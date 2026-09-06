@@ -87,7 +87,7 @@ export class PartitionedSchedulerService {
     // Explicit seat selections are handled by the demo seat service, which is also
     // the source of truth in offline prototype mode.
     if (job.selectedSeats?.length) {
-      return SeatLockService.reserveSelectedSeats(job);
+      return SeatLockService.reserveSelectedSeatsDistributed(job);
     }
     let client: any = null;
     try {

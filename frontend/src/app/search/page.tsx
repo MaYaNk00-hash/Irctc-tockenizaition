@@ -21,6 +21,7 @@ export default function SearchPage() {
   const [selectedClass, setSelectedClass] = useState<string>('3A');
   const [travelDate, setTravelDate] = useState<string>('2026-08-26');
   const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string>('');
   const [from, setFrom] = useState('NDLS (New Delhi)');
   const [to, setTo] = useState('MMCT (Mumbai Central)');
   const [passengerCount, setPassengerCount] = useState(1);
@@ -45,24 +46,14 @@ export default function SearchPage() {
         if (data.success) {
           setTrains(data.data);
         } else {
-          setFallbackTrains();
+          setError(data.error || 'Train search is unavailable.');
         }
       })
-      .catch(() => setFallbackTrains())
+      .catch(() => setError('Train search is unavailable. Check the backend connection and try again.'))
       .finally(() => setLoading(false));
 
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, []);
-
-  const setFallbackTrains = () => {
-    setTrains([
-      { trainId: '12002', name: 'Bhopal Shatabdi Express', origin: 'NDLS (New Delhi)', destination: 'RKMP (Rani Kamalapati)', departureTime: '06:00 AM', arrivalTime: '14:40 PM', duration: '8h 40m', classes: ['1A', 'EC', 'CC'] },
-      { trainId: '12951', name: 'Mumbai Rajdhani Express', origin: 'NDLS (New Delhi)', destination: 'MMCT (Mumbai Central)', departureTime: '16:55 PM', arrivalTime: '08:35 AM', duration: '15h 40m', classes: ['1A', '2A', '3A'] },
-      { trainId: '20901', name: 'Vande Bharat Express', origin: 'MMCT (Mumbai Central)', destination: 'GNC (Gandhinagar Cap)', departureTime: '06:00 AM', arrivalTime: '12:25 PM', duration: '6h 25m', classes: ['EC', 'CC'] },
-      { trainId: '12260', name: 'Sealdah Duronto Express', origin: 'NDLS (New Delhi)', destination: 'SDAH (Sealdah)', departureTime: '19:45 PM', arrivalTime: '12:30 PM', duration: '16h 45m', classes: ['1A', '2A', '3A', 'SL'] },
-      { trainId: '12626', name: 'Kerala Express', origin: 'NDLS (New Delhi)', destination: 'TVC (Trivandrum)', departureTime: '20:10 PM', arrivalTime: '18:00 PM (+2 days)', duration: '45h 50m', classes: ['2A', '3A', 'SL'] }
-    ]);
-  };
 
   const handleBookTatkal = (train: TrainData, seatClass: string) => {
     const signals = {
@@ -176,6 +167,8 @@ export default function SearchPage() {
             <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-irctc-navy border-t-transparent" />
             <p className="mt-2 text-sm font-medium">Fetching Tatkal inventory status...</p>
           </div>
+        ) : error ? (
+          <div role="alert" className="rounded-xl border border-rose-300 bg-rose-50 p-8 text-center text-sm font-semibold text-rose-800">{error}</div>
         ) : (
           filteredTrains.map((train) => (
             <div

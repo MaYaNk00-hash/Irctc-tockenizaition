@@ -11,11 +11,6 @@ interface Passenger {
   berth: string;
 }
 
-const demoSeatMap = Array.from({ length: 16 }, (_, index) => ({
-  number: `B2-${index + 41}`,
-  state: index === 3 || index === 10 ? 'OCCUPIED' : 'AVAILABLE'
-}));
-
 function BookingContent() {
   const API_BASE = process.env.NEXT_PUBLIC_API_URL || (process.env.NODE_ENV === 'development' ? 'http://localhost:5000' : '');
   const searchParams = useSearchParams();
@@ -25,7 +20,7 @@ function BookingContent() {
   const trainName = searchParams.get('trainName') || 'Bhopal Shatabdi Express';
   const seatClass = searchParams.get('seatClass') || '3A';
   const travelDate = searchParams.get('travelDate') || '2026-08-26';
-  const admissionToken = searchParams.get('admissionToken') || 'adm_token_demo_123';
+  const admissionToken = searchParams.get('admissionToken') || '';
   const passengerCount = Math.min(4, Math.max(1, Number(searchParams.get('passengers') || '1')));
 
   const [passengers, setPassengers] = useState<Passenger[]>(() => Array.from({ length: passengerCount }, (_, index) => ({ name: index === 0 ? 'Mayank Kumar' : '', age: 26, gender: 'Male', berth: 'Lower' })));
@@ -48,10 +43,7 @@ function BookingContent() {
         if (!data.success) throw new Error(data.error || 'Seat service unavailable');
         setSeatMap(data.data.seats);
       })
-      .catch(() => {
-        setSeatMap(demoSeatMap);
-        setErrorMessage('Live inventory is unavailable, so demo seats have been loaded for you.');
-      })
+      .catch((error: Error) => setErrorMessage(error.message || 'Seat inventory is unavailable.'))
       .finally(() => setSeatsLoading(false));
   };
 
@@ -89,14 +81,6 @@ function BookingContent() {
     setPassengers(updated);
   };
 
-  const completeDemoReservation = () => {
-    const demoTokenId = 'token_demo_' + Math.random().toString(36).substring(7);
-    setBookingState('RESERVED');
-    setTokenId(demoTokenId);
-    setExpiresAt(new Date(Date.now() + 300_000).toISOString());
-    window.localStorage.setItem(`tatkal.booking.${demoTokenId}`, JSON.stringify({ trainId, trainName, seatClass, travelDate, passengers, selectedSeats, amount: 1450 }));
-  };
-
   const handleProceedToLock = (e: React.FormEvent) => {
     e.preventDefault();
     setBookingState('SCHEDULING');
@@ -124,21 +108,30 @@ function BookingContent() {
         selectedSeats
       })
     })
-      .then((res) => res.json())
-      .then((data) => {
+      .then(async (res) => ({ status: res.status, data: await res.json() }))
+      .then(({ status, data }) => {
         if (data.success && data.data.status === 'RESERVED') {
           setBookingState('RESERVED');
           setTokenId(data.data.tokenId);
           setExpiresAt(data.data.expiresAt);
           window.localStorage.setItem(`tatkal.booking.${data.data.tokenId}`, JSON.stringify({ trainId, trainName, seatClass, travelDate, passengers, selectedSeats, amount: 1450 }));
         } else {
-          // This is a guided demo: an expired queue token or simulated inventory
-          // response should never block the participant from seeing the next step.
-          completeDemoReservation();
+          setBookingState('FAILED');
+          if (status === 401 || status === 403 || status === 409) {
+            const queueKeyPrefix = `tatkal.queue.${trainId}:${seatClass}:${travelDate}.`;
+            Object.keys(window.localStorage)
+              .filter(key => key.startsWith(queueKeyPrefix))
+              .forEach(key => window.localStorage.removeItem(key));
+            setErrorMessage('Your waiting-room admission expired. Returning you to the queue for a fresh admission.');
+            window.setTimeout(() => router.replace(`/waiting-room?trainId=${trainId}&trainName=${encodeURIComponent(trainName)}&seatClass=${seatClass}&travelDate=${travelDate}&passengers=${passengerCount}`), 1200);
+          } else {
+            setErrorMessage(data.error || data.data?.reason || 'Seat reservation was not completed.');
+          }
         }
       })
       .catch(() => {
-        completeDemoReservation();
+        setBookingState('FAILED');
+        setErrorMessage('Seat reservation is unavailable. Check the backend connection and try again.');
       });
   };
 

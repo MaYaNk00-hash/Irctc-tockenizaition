@@ -28,6 +28,23 @@ const coachForClass = (seatClass: string) => seatClass === '1A' ? 'H1' : seatCla
 const inventoryKeyFor = (trainId: string, seatClass: string, travelDate: string) => `${trainId}:${seatClass}:${travelDate}`;
 
 export class SeatLockService {
+  public static async releaseLockDistributed(tokenId: string, status: 'EXPIRED' | 'PAYMENT_FAILED' = 'EXPIRED'): Promise<boolean> {
+    let record = memoryTokens.get(tokenId);
+    if (!record && redis.status === 'ready') {
+      try {
+        const raw = await redis.get(`seat_token:${tokenId}`);
+        if (raw) record = JSON.parse(raw) as SeatTokenRecord;
+      } catch { /* use the local fallback below */ }
+    }
+    if (!record) return false;
+    if (record.inventoryKey && record.seatNumbers?.length && redis.status === 'ready') {
+      await redis.hdel(`seat_locks:${record.inventoryKey}`, ...record.seatNumbers);
+      await redis.del(`seat_lock:${tokenId}`, `seat_token:${tokenId}`);
+    }
+    memoryTokens.set(tokenId, record);
+    return this.releaseLock(tokenId, status);
+  }
+
   public static releaseLock(tokenId: string, status: 'EXPIRED' | 'PAYMENT_FAILED' = 'EXPIRED'): boolean {
     const record = memoryTokens.get(tokenId);
     if (!record || record.status === 'CONFIRMED' || record.status === 'REFUND_COMPLETED') return false;
@@ -36,6 +53,10 @@ export class SeatLockService {
     if (record.inventoryKey) {
       const locks = memorySeatLocks.get(record.inventoryKey);
       record.seatNumbers?.forEach(seat => locks?.delete(seat));
+      if (redis.status === 'ready' && record.seatNumbers?.length) {
+        redis.hdel(`seat_locks:${record.inventoryKey}`, ...record.seatNumbers).catch(() => undefined);
+        redis.del(`seat_lock:${tokenId}`, `seat_token:${tokenId}`).catch(() => undefined);
+      }
       const available = memoryInventorySeats.get(record.inventoryKey) || 0;
       memoryInventorySeats.set(record.inventoryKey, available + (record.seatCount || 1));
     }
@@ -54,6 +75,115 @@ export class SeatLockService {
       return { number, state: occupied ? 'OCCUPIED' : token && token.status === 'RESERVED' ? 'LOCKED' : 'AVAILABLE' };
     });
     return { coach, seats, available: seats.filter(seat => seat.state === 'AVAILABLE').length };
+  }
+
+  public static async getSeatMapAsync(trainId: string, seatClass: string, travelDate: string) {
+    if (redis.status !== 'ready') return this.getSeatMap(trainId, seatClass, travelDate);
+    const key = inventoryKeyFor(trainId, seatClass, travelDate);
+    try {
+      const locks = await redis.hgetall(`seat_locks:${key}`);
+      const lockEntries = Object.entries(locks);
+      const activeEntries = await Promise.all(lockEntries.map(async ([seat, tokenId]) => {
+        return (await redis.exists(`seat_lock:${tokenId}`)) === 1 ? [seat, tokenId] as const : null;
+      }));
+      for (let index = 0; index < activeEntries.length; index++) {
+        if (!activeEntries[index]) await redis.hdel(`seat_locks:${key}`, lockEntries[index][0]);
+      }
+      const activeLocks = Object.fromEntries(activeEntries.filter((entry): entry is readonly [string, string] => Boolean(entry)));
+      const coach = coachForClass(seatClass);
+      const seats = Array.from({ length: 40 }, (_, index) => {
+        const number = `${coach}-${String(index + 1).padStart(2, '0')}`;
+        const occupied = index === 6 || index === 19 || index === 31;
+        return { number, state: occupied ? 'OCCUPIED' : activeLocks[number] ? 'LOCKED' : 'AVAILABLE' };
+      });
+      return { coach, seats, available: seats.filter(seat => seat.state === 'AVAILABLE').length };
+    } catch {
+      return this.getSeatMap(trainId, seatClass, travelDate);
+    }
+  }
+
+  public static async reserveSelectedSeatsDistributed(job: BookingJob): Promise<JobResult> {
+    if (redis.status !== 'ready') return this.reserveSelectedSeats(job);
+    const key = inventoryKeyFor(job.trainId, job.seatClass, job.travelDate);
+    const requested = Math.max(job.passengerNames.length, 1);
+    const selectedSeats = job.selectedSeats || [];
+    if (selectedSeats.length !== requested || new Set(selectedSeats).size !== selectedSeats.length) {
+      return { jobId: job.jobId, status: 'FAILED', reason: 'Select one unique available seat for each passenger.' };
+    }
+
+    const coach = coachForClass(job.seatClass);
+    const validSeats = new Set(Array.from({ length: 40 }, (_, index) => `${coach}-${String(index + 1).padStart(2, '0')}`));
+    const occupiedSeats = new Set([`${coach}-07`, `${coach}-20`, `${coach}-32`]);
+    if (selectedSeats.some(seat => !validSeats.has(seat) || occupiedSeats.has(seat))) {
+      return { jobId: job.jobId, status: 'SEATS_EXHAUSTED', reason: 'One or more selected seats are occupied or invalid.' };
+    }
+
+    const tokenId = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
+    const result = await redis.eval(
+      `for i = 1, #ARGV - 2 do
+         if redis.call('HEXISTS', KEYS[1], ARGV[i]) == 1 then return 0 end
+       end
+       for i = 1, #ARGV - 2 do redis.call('HSET', KEYS[1], ARGV[i], ARGV[#ARGV - 1]) end
+       redis.call('SETEX', KEYS[2], ARGV[#ARGV], ARGV[#ARGV - 1])
+       return 1`,
+      2,
+      `seat_locks:${key}`,
+      `seat_lock:${tokenId}`,
+      ...selectedSeats,
+      tokenId,
+      Math.max(1, Math.floor((expiresAt.getTime() - Date.now()) / 1000)).toString()
+    );
+    if (result !== 1) return { jobId: job.jobId, status: 'SEATS_EXHAUSTED', reason: 'One or more selected seats are no longer available.' };
+
+    const record: SeatTokenRecord = {
+      tokenId, userId: job.userId, inventoryId: 1, status: 'RESERVED', expiresAt,
+      inventoryKey: key, seatCount: selectedSeats.length, trainId: job.trainId,
+      seatClass: job.seatClass, travelDate: job.travelDate, passengerNames: job.passengerNames, seatNumbers: selectedSeats
+    };
+
+    let client: any = null;
+    try {
+      client = await pool.connect();
+      await client.query('BEGIN');
+      const inventory = await client.query(
+        `INSERT INTO seat_inventory (train_id, seat_class, travel_date, total_seats, available_seats)
+         VALUES ($1, $2, $3, 40, 37)
+         ON CONFLICT (train_id, seat_class, travel_date) DO UPDATE SET available_seats = seat_inventory.available_seats
+         RETURNING id`,
+        [job.trainId, job.seatClass, job.travelDate]
+      );
+      const inventoryId = inventory.rows[0]?.id || (await client.query(
+        `SELECT id FROM seat_inventory WHERE train_id = $1 AND seat_class = $2 AND travel_date = $3 FOR UPDATE`,
+        [job.trainId, job.seatClass, job.travelDate]
+      )).rows[0]?.id;
+      if (!inventoryId) throw new Error('Seat inventory row could not be created.');
+      record.inventoryId = Number(inventoryId);
+      await client.query(
+        `INSERT INTO seat_tokens (token_id, user_id, inventory_id, status, expires_at)
+         VALUES ($1, $2, $3, 'RESERVED', $4)`,
+        [tokenId, job.userId, record.inventoryId, expiresAt]
+      );
+      for (let index = 0; index < selectedSeats.length; index++) {
+        await client.query(
+          `INSERT INTO token_seats (token_id, passenger_name, seat_number) VALUES ($1, $2, $3)`,
+          [tokenId, job.passengerNames[index], selectedSeats[index]]
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      if (client) try { await client.query('ROLLBACK'); } catch { /* preserve the original failure */ }
+      await redis.hdel(`seat_locks:${key}`, ...selectedSeats);
+      await redis.del(`seat_lock:${tokenId}`, `seat_token:${tokenId}`);
+      return { jobId: job.jobId, status: 'FAILED', reason: error instanceof Error ? error.message : 'Seat reservation persistence failed.' };
+    } finally {
+      if (client) client.release();
+    }
+
+    memoryTokens.set(tokenId, record);
+    await redis.setex(`seat_token:${tokenId}`, Math.max(1, Math.floor((expiresAt.getTime() - Date.now()) / 1000)), JSON.stringify(record));
+    await AuditService.logStatus(tokenId, 'ADMITTED', 'SEAT_LOCKED', `Temporarily reserved ${selectedSeats.join(', ')} for ${requested} passenger(s).`);
+    return { jobId: job.jobId, status: 'RESERVED', tokenId, expiresAt: expiresAt.toISOString() };
   }
 
   public static reserveSelectedSeats(job: BookingJob): JobResult {
@@ -112,7 +242,13 @@ export class SeatLockService {
          FROM seat_tokens WHERE token_id = $1`,
         [tokenId]
       );
-      if (res.rows.length === 0) return null;
+      if (res.rows.length === 0) {
+        if (redis.status === 'ready') {
+          const raw = await redis.get(`seat_token:${tokenId}`);
+          if (raw) return JSON.parse(raw) as SeatTokenRecord;
+        }
+        return null;
+      }
       const row = res.rows[0];
       return {
         tokenId: row.token_id,
@@ -123,6 +259,12 @@ export class SeatLockService {
         pnr: row.pnr
       };
     } catch {
+      if (redis.status === 'ready') {
+        try {
+          const raw = await redis.get(`seat_token:${tokenId}`);
+          if (raw) return JSON.parse(raw) as SeatTokenRecord;
+        } catch { /* use local degraded fallback */ }
+      }
       const mem = memoryTokens.get(tokenId);
       return mem || null;
     }
@@ -179,9 +321,11 @@ export class SeatLockService {
    */
   public static async reconcileExpiredTokens(): Promise<number> {
     let expiredCount = 0;
+    let client: any = null;
     try {
-      // Find all RESERVED / PAYMENT_PROCESSING tokens where expires_at < NOW()
-      const res = await pool.query(
+      client = await pool.connect();
+      await client.query('BEGIN');
+      const res = await client.query(
         `SELECT token_id, inventory_id, status FROM seat_tokens
          WHERE status IN ('RESERVED', 'PAYMENT_PROCESSING') AND expires_at < NOW()
          FOR UPDATE SKIP LOCKED`
@@ -193,28 +337,28 @@ export class SeatLockService {
         const fromStatus = row.status;
 
         // Count how many seats were reserved under this token
-        const seatsRes = await pool.query(
+        const seatsRes = await client.query(
           `SELECT COUNT(*) FROM token_seats WHERE token_id = $1`,
           [tokenId]
         );
         const seatCount = Math.max(parseInt(seatsRes.rows[0].count, 10), 1);
 
         // Update token status to EXPIRED
-        await pool.query(
+        await client.query(
           `UPDATE seat_tokens SET status = 'EXPIRED' WHERE token_id = $1`,
           [tokenId]
         );
 
         // Atomically increment seat_inventory available_seats back
-        await pool.query(
+        await client.query(
           `UPDATE seat_inventory SET available_seats = available_seats + $1, version = version + 1 WHERE id = $2`,
           [seatCount, inventoryId]
         );
 
         // Remove from Redis lock
-        await redis.del(`seat_lock:${tokenId}`);
+        await client.query('COMMIT');
+        await redis.del(`seat_lock:${tokenId}`, `seat_token:${tokenId}`);
 
-        // Log audit
         await AuditService.logStatus(
           tokenId,
           fromStatus,
@@ -223,8 +367,11 @@ export class SeatLockService {
         );
 
         expiredCount++;
+        await client.query('BEGIN');
       }
+      await client.query('COMMIT');
     } catch {
+      if (client) try { await client.query('ROLLBACK'); } catch { /* already unavailable */ }
       // In-memory expiry check
       const now = new Date();
       for (const [tokenId, record] of memoryTokens.entries()) {
@@ -233,6 +380,8 @@ export class SeatLockService {
         }
       }
     }
+
+    if (client) client.release();
 
     return expiredCount;
   }

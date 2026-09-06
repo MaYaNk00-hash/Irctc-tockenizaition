@@ -20,6 +20,7 @@ export default function AdminDashboardPage() {
   const [simulatingLoad, setSimulatingLoad] = useState<boolean>(false);
   const [loadProgress, setLoadProgress] = useState<number>(0);
   const [loadLogs, setLoadLogs] = useState<string[]>([]);
+  const [metricsError, setMetricsError] = useState<string>('');
   const [simulationStats, setSimulationStats] = useState<{ received: number; admitted: number; successful: number; paymentFailures: number; queued: number; partitions: number[] } | null>(null);
   const [metrics, setMetrics] = useState<any>(null);
 
@@ -37,47 +38,12 @@ export default function AdminDashboardPage() {
     fetch(`${API_BASE}/api/admin/bot-metrics`)
       .then((res) => res.json())
       .then((data) => {
-        if (data.success) {
-          setRiskScores(data.data);
-        } else {
-          setFallbackMetrics();
-        }
+        if (data.success) setRiskScores(data.data);
+        else setMetricsError(data.error || 'Risk metrics are unavailable.');
       })
-      .catch(() => setFallbackMetrics())
+      .catch(() => setMetricsError('Risk metrics are unavailable. Check the backend connection and try again.'))
       .finally(() => setLoading(false));
     fetch(`${API_BASE}/api/admin/metrics`).then(res => res.json()).then(data => { if (data.success) setMetrics(data.data); }).catch(() => undefined);
-  };
-
-  const setFallbackMetrics = () => {
-    setRiskScores([
-      {
-        id: 101,
-        session_id: 'sess_bot_script_9',
-        device_fingerprint: 'fp_puppeteer_headless_0a',
-        score: 85,
-        signals: { rateLimitExceeded: true, instantInteraction: true, roboticTyping: true },
-        friction_applied: 'VERY_HIGH_SOFT_BLOCK',
-        created_at: new Date().toISOString()
-      },
-      {
-        id: 102,
-        session_id: 'sess_human_browser_2',
-        device_fingerprint: 'fp_chrome_win_89a7',
-        score: 15,
-        signals: { navigatedFromSearch: true },
-        friction_applied: 'NONE',
-        created_at: new Date(Date.now() - 5000).toISOString()
-      },
-      {
-        id: 103,
-        session_id: 'sess_fast_clicker',
-        device_fingerprint: 'fp_python_requests_3b',
-        score: 45,
-        signals: { lowMouseEntropy: true, directBookingJump: true },
-        friction_applied: 'MEDIUM_POW',
-        created_at: new Date(Date.now() - 12000).toISOString()
-      }
-    ]);
   };
 
   // Trigger 10,000 Concurrent Join Requests Simulator
@@ -123,7 +89,7 @@ export default function AdminDashboardPage() {
           </p>
         </div>
 
-        {/* 10,000 Request Stress Test Trigger */}
+        {/* Non-functional placeholder retained until the real Phase 8 load test exists. */}
         <button
           onClick={trigger10kLoadTest}
           disabled={simulatingLoad}
@@ -137,17 +103,17 @@ export default function AdminDashboardPage() {
           ) : (
             <>
               <Play className="w-4 h-4 mr-2 fill-current" />
-              Simulate 10,000 Concurrent Join Requests
+              Non-functional 10,000 Request Demo
             </>
           )}
         </button>
       </div>
 
-      {/* Stress Test Progress Modal */}
+      {/* Non-functional placeholder progress display. */}
       {simulatingLoad && (
         <div className="bg-slate-900 text-white rounded-xl p-5 border border-slate-800 space-y-3 shadow-2xl">
           <div className="flex justify-between items-center text-xs font-mono">
-            <span className="text-amber-400 font-bold">10,000 REQUEST CONCURRENCY SIMULATOR ACTIVE</span>
+            <span className="text-amber-400 font-bold">NON-FUNCTIONAL DEMO PLACEHOLDER</span>
             <span>{loadProgress}% COMPLETE</span>
           </div>
           <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden p-0.5 border border-slate-700">
@@ -195,7 +161,7 @@ export default function AdminDashboardPage() {
             </div>
           ))}
           <p className="col-span-2 md:col-span-5 text-xs text-emerald-900 border-t border-emerald-200 pt-3">
-            Simulation result: 0 duplicate bookings and 0 negative-inventory events.
+            Non-functional placeholder only. No load traffic was generated and these figures are not production telemetry.
           </p>
         </div>
       )}
@@ -215,7 +181,7 @@ export default function AdminDashboardPage() {
           </div>
 
           <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
-            {riskScores.map((score) => (
+            {metricsError ? <div role="alert" className="rounded-lg border border-rose-300 bg-rose-50 p-4 text-xs font-semibold text-rose-800">{metricsError}</div> : riskScores.map((score) => (
               <div key={score.id} className="p-3 rounded-lg border border-slate-200 bg-slate-50 flex justify-between items-center text-xs">
                 <div className="space-y-1">
                   <div className="flex items-center space-x-2">

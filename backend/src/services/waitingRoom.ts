@@ -2,6 +2,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { pool, redis } from '../db';
 import { BotDetectionService, BehavioralSignals, verifyProofOfWork } from './botDetection';
+import { AuditService } from './auditService';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'tatkal_secret_key_2026';
 
@@ -21,6 +22,7 @@ export interface JoinRequest {
 export interface WaitingRoomStatus {
   ticketId: string;
   status: 'QUEUED' | 'ADMITTED' | 'EXPIRED';
+  found: boolean;
   position: number;
   totalInQueue: number;
   batchNumber?: number;
@@ -45,7 +47,7 @@ const memorySecondaryFifo: Map<string, InMemTicket[]> = new Map();
 const memoryAdmittedTokens: Map<string, { userId: number; trainKey: string; expiresAt: number; consumed: boolean }> = new Map();
 const verificationChallenges = new Map<string, { id: string; type: 'POW' | 'CAPTCHA'; challenge?: string; targetZeros?: number; answer?: number; expiresAt: number }>();
 const memoryTickets: Map<string, InMemTicket> = new Map();
-const activeTrainKeys: Set<string> = new Set();
+const memoryActiveTrainKeys: Set<string> = new Set();
 let isWindowFrozen = false;
 let batchCounter = 0;
 
@@ -117,7 +119,10 @@ export class WaitingRoomService {
     }
 
     const trainKey = this.getTrainKey(req.trainId, req.seatClass, req.travelDate);
-    activeTrainKeys.add(trainKey);
+    if (redis.status === 'ready') {
+      try { await redis.sadd('waiting_room:active_train_keys', trainKey); } catch { /* degraded fallback below */ }
+    }
+    memoryActiveTrainKeys.add(trainKey);
     const ticketId = crypto.randomUUID();
     const joinedAt = Date.now();
     const isSoftBlocked = risk.friction === 'VERY_HIGH_SOFT_BLOCK';
@@ -175,6 +180,8 @@ export class WaitingRoomService {
       }
     }
 
+    await AuditService.logWaitingRoomStatus(ticketId, 'CREATED', 'QUEUED', `Joined the virtual waiting room for ${trainKey}.`);
+
     return {
       ticketId,
       jwtTicket,
@@ -193,6 +200,7 @@ export class WaitingRoomService {
         if (meta && meta.status === 'ADMITTED') {
           return {
             ticketId,
+            found: true,
             status: 'ADMITTED',
             position: 0,
             totalInQueue: 0,
@@ -211,6 +219,7 @@ export class WaitingRoomService {
           const estWaitSec = Math.ceil((estBatches * waitingRoomConfig.batchIntervalMs) / 1000);
           return {
             ticketId,
+            found: true,
             status: 'QUEUED',
             position: rank + 1,
             totalInQueue: total,
@@ -228,6 +237,7 @@ export class WaitingRoomService {
       if (item.status === 'ADMITTED') {
         return {
           ticketId,
+            found: true,
           status: 'ADMITTED',
           position: 0,
           totalInQueue: 0,
@@ -242,6 +252,7 @@ export class WaitingRoomService {
       const pos = idx >= 0 ? idx + 1 : 1;
       return {
         ticketId,
+        found: true,
         status: 'QUEUED',
         position: pos,
         totalInQueue: Math.max(poolList.length, 1),
@@ -251,6 +262,7 @@ export class WaitingRoomService {
 
     return {
       ticketId,
+      found: false,
       status: 'QUEUED',
       position: 1,
       totalInQueue: 1,
@@ -262,14 +274,20 @@ export class WaitingRoomService {
    * Freeze & Batch Release Engine (Seeded Fisher-Yates Shuffle)
    */
   public static async processNextBatch(trainKey: string): Promise<number> {
-    batchCounter++;
-    const currentBatch = batchCounter;
+    let currentBatch: number;
+    if (redis.status === 'ready') {
+      currentBatch = await redis.incr('waiting_room:batch_counter');
+    } else {
+      batchCounter++;
+      currentBatch = batchCounter;
+    }
     let admittedCount = 0;
 
     try {
       const redisKey = `waiting_room:${trainKey}`;
       // Fetch up to batchSize tickets from sorted set
-      const tickets = await redis.zrange(redisKey, 0, waitingRoomConfig.batchSize - 1);
+      const ticketsWithScores = await redis.zpopmin(redisKey, waitingRoomConfig.batchSize);
+      const tickets = ticketsWithScores.filter((_, index) => index % 2 === 0);
       if (tickets.length === 0) {
         // Process secondary queue if primary is empty
         const secondary = await redis.lpop(`waiting_room_secondary:${trainKey}`, waitingRoomConfig.batchSize);
@@ -294,7 +312,6 @@ export class WaitingRoomService {
         const meta = await redis.hgetall(`ticket_meta:${ticketId}`);
         const userId = parseInt(meta.userId || '1', 10);
         await this.admitUser(ticketId, userId, trainKey, currentBatch);
-        await redis.zrem(redisKey, ticketId);
         admittedCount++;
       }
     } catch {
@@ -311,6 +328,7 @@ export class WaitingRoomService {
           trainKey,
           expiresAt: Date.now() + waitingRoomConfig.admissionTtlSeconds * 1000, consumed: false
         });
+        await AuditService.logWaitingRoomStatus(item.ticketId, 'QUEUED', 'ADMITTED', `Admitted from waiting-room batch ${currentBatch}.`);
         admittedCount++;
       }
     }
@@ -319,9 +337,14 @@ export class WaitingRoomService {
   }
 
   public static async processAllBatches(): Promise<void> {
-    for (const trainKey of Array.from(activeTrainKeys)) {
-      await this.processNextBatch(trainKey);
+    if (redis.status === 'ready') {
+      try {
+        const trainKeys = await redis.smembers('waiting_room:active_train_keys');
+        for (const trainKey of trainKeys) await this.processNextBatch(trainKey);
+        return;
+      } catch { /* use degraded fallback below */ }
     }
+    for (const trainKey of Array.from(memoryActiveTrainKeys)) await this.processNextBatch(trainKey);
   }
 
   private static async admitUser(ticketId: string, userId: number, trainKey: string, batchNumber: number) {
@@ -352,18 +375,48 @@ export class WaitingRoomService {
         // Fallback already saved in memoryAdmittedTokens and memoryTickets
       }
     }
+    await AuditService.logWaitingRoomStatus(ticketId, 'QUEUED', 'ADMITTED', `Admitted from waiting-room batch ${batchNumber}.`);
   }
 
   public static async consumeAdmissionToken(admissionToken: string, userId: number, trainId: string, seatClass: string, travelDate: string): Promise<boolean> {
-    if (!this.isAdmissionTokenValid(admissionToken, userId, trainId, seatClass, travelDate)) return false;
+    const trainKey = this.getTrainKey(trainId, seatClass, travelDate);
+    if (redis.status === 'ready') {
+      try {
+        const consumed = await redis.eval(
+          `local payload = redis.call('GET', KEYS[1])
+           if not payload then return 0 end
+           local data = cjson.decode(payload)
+           if tostring(data.userId) ~= ARGV[1] or data.trainKey ~= ARGV[2] then return 0 end
+           redis.call('DEL', KEYS[1])
+           return 1`,
+          1,
+          `admission_token:${admissionToken}`,
+          userId.toString(),
+          trainKey
+        );
+        return consumed === 1;
+      } catch { return false; }
+    }
+
     const item = memoryAdmittedTokens.get(admissionToken);
-    item!.consumed = true;
+    if (!item || item.consumed || item.expiresAt <= Date.now() || item.userId !== userId || item.trainKey !== trainKey) return false;
+    item.consumed = true;
     return true;
   }
 
-  public static isAdmissionTokenValid(admissionToken: string, userId: number, trainId: string, seatClass: string, travelDate: string): boolean {
+  public static async isAdmissionTokenValid(admissionToken: string, userId: number, trainId: string, seatClass: string, travelDate: string): Promise<boolean> {
+    const trainKey = this.getTrainKey(trainId, seatClass, travelDate);
+    if (redis.status === 'ready') {
+      try {
+        const raw = await redis.get(`admission_token:${admissionToken}`);
+        if (!raw) return false;
+        const item = JSON.parse(raw) as { userId: number; trainKey: string };
+        return item.userId === userId && item.trainKey === trainKey;
+      } catch { return false; }
+    }
+
     const item = memoryAdmittedTokens.get(admissionToken);
-    return Boolean(item && !item.consumed && item.expiresAt > Date.now() && item.userId === userId && item.trainKey === this.getTrainKey(trainId, seatClass, travelDate));
+    return Boolean(item && !item.consumed && item.expiresAt > Date.now() && item.userId === userId && item.trainKey === trainKey);
   }
 
   private static createChallenge(sessionId: string, friction: string) {
