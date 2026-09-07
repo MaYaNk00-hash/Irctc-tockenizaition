@@ -10,6 +10,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "dev": "nodemon --watch src --ext ts --exec ts-node src/server.ts",
+    "db:migrate": "ts-node src/db/migrate.ts",
     "test": "jest --detectOpenHandles --forceExit"
   },
   "dependencies": {

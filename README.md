@@ -95,7 +95,28 @@ npm run dev
 - Backend API: `http://localhost:5000`
 - Health check: `http://localhost:5000/health`
 
-### 2. Testing
+### 2. Supabase PostgreSQL
+
+The backend uses Supabase's PostgreSQL database through the `pg` driver. In the
+root `.env`, set `DATABASE_URL` to the PostgreSQL URI from Supabase **Project
+Settings -> Database**, not the `/rest/v1/` REST URL. URL-encode special
+characters in the database password. For Supabase, keep `DB_SSL=true`.
+
+Apply the complete schema, including all tables, constraints, indexes, and the
+audit-log migration, with:
+
+```bash
+cd backend
+npm run db:migrate
+```
+
+To load the demo train inventory after migrating:
+
+```bash
+npx ts-node ../scripts/seed-db.ts
+```
+
+### 3. Testing
 
 ```bash
 cd backend
