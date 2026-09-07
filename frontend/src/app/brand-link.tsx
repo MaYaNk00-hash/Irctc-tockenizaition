@@ -26,17 +26,17 @@ export default function BrandLink() {
 
   return (
     <Link href={isSignedIn ? '/search' : '/landing'} className="flex items-center space-x-3 group" aria-label={isSignedIn ? 'Go to train search dashboard' : 'Go to landing page'}>
-      <div className="bg-irctc-orange p-2 rounded-lg shadow-md group-hover:scale-105 transition-transform">
-        <Train className="w-6 h-6 text-white" />
+      <div className="bg-irctc-navy p-2 rounded-md shadow-md group-hover:bg-irctc-blue transition-colors">
+        <Train className="w-7 h-7 text-white" />
       </div>
       <div>
         <div className="flex items-center space-x-2">
-          <span className="font-extrabold text-xl tracking-tight text-white">IRCTC</span>
-          <span className="bg-orange-500/30 text-amber-300 text-xs px-2 py-0.5 rounded font-mono border border-amber-500/40">
+          <span className="font-black text-xl tracking-tight text-irctc-navy">IRCTC</span>
+          <span className="bg-orange-50 text-irctc-orange text-[10px] px-2 py-0.5 rounded font-bold border border-orange-200">
             TATKAL FAIR-BOOKING
           </span>
         </div>
-        <p className="text-[11px] text-slate-300 tracking-wide">Indian Railways Catering and Tourism Corporation</p>
+        <p className="text-[11px] text-slate-500 tracking-wide">Indian Railways Catering and Tourism Corporation</p>
       </div>
     </Link>
   );

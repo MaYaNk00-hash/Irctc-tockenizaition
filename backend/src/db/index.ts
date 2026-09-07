@@ -8,6 +8,9 @@ dotenv.config();
 
 const PG_URI = process.env.DATABASE_URL;
 const REDIS_URI = process.env.REDIS_URL;
+const poolMax = Number.parseInt(process.env.DB_POOL_MAX || '20', 10);
+const poolIdleTimeout = Number.parseInt(process.env.DB_POOL_IDLE_TIMEOUT_MS || '30000', 10);
+const poolConnectionTimeout = Number.parseInt(process.env.DB_POOL_CONNECTION_TIMEOUT_MS || '2000', 10);
 
 const unavailablePool = {
   connect: async () => { throw new Error('DATABASE_URL is not configured'); },
@@ -16,9 +19,9 @@ const unavailablePool = {
 
 export const pool = (PG_URI ? new Pool({
   connectionString: PG_URI,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  max: Number.isFinite(poolMax) && poolMax > 0 ? poolMax : 20,
+  idleTimeoutMillis: Number.isFinite(poolIdleTimeout) && poolIdleTimeout > 0 ? poolIdleTimeout : 30000,
+  connectionTimeoutMillis: Number.isFinite(poolConnectionTimeout) && poolConnectionTimeout > 0 ? poolConnectionTimeout : 2000,
 }) : unavailablePool) as Pool;
 
 const unavailableRedis = new Proxy({ status: 'end' }, {

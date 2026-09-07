@@ -27,7 +27,59 @@ const memorySeatLocks: Map<string, Map<string, string>> = new Map(); // inventor
 const coachForClass = (seatClass: string) => seatClass === '1A' ? 'H1' : seatClass === '2A' ? 'A1' : seatClass === '3A' ? 'B2' : seatClass === 'CC' || seatClass === 'EC' ? 'C1' : 'S4';
 const inventoryKeyFor = (trainId: string, seatClass: string, travelDate: string) => `${trainId}:${seatClass}:${travelDate}`;
 
+export function computeBerthMetadata(index: number, seatClass: string) {
+  const seatNum = index + 1;
+  let berthType: 'LB' | 'MB' | 'UB' | 'SL' | 'SU' = 'LB';
+  let berthLabel = 'Lower Berth';
+  let isWindow = false;
+
+  if (seatClass === '2A') {
+    const mod6 = seatNum % 6;
+    if (mod6 === 1 || mod6 === 4) { berthType = 'LB'; berthLabel = 'Lower Berth (LB)'; isWindow = true; }
+    else if (mod6 === 2 || mod6 === 5) { berthType = 'UB'; berthLabel = 'Upper Berth (UB)'; isWindow = false; }
+    else if (mod6 === 3) { berthType = 'SL'; berthLabel = 'Side Lower (SL)'; isWindow = true; }
+    else { berthType = 'SU'; berthLabel = 'Side Upper (SU)'; isWindow = true; }
+  } else if (seatClass === '1A') {
+    const mod4 = seatNum % 4;
+    if (mod4 === 1 || mod4 === 2) { berthType = 'LB'; berthLabel = 'Lower Berth (LB)'; isWindow = (mod4 === 1); }
+    else { berthType = 'UB'; berthLabel = 'Upper Berth (UB)'; isWindow = (mod4 === 3); }
+  } else {
+    // 3A, CC, EC, SL
+    const mod8 = seatNum % 8;
+    if (mod8 === 1 || mod8 === 4) { berthType = 'LB'; berthLabel = 'Lower Berth (LB)'; isWindow = (mod8 === 1); }
+    else if (mod8 === 2 || mod8 === 5) { berthType = 'MB'; berthLabel = 'Middle Berth (MB)'; isWindow = false; }
+    else if (mod8 === 3 || mod8 === 6) { berthType = 'UB'; berthLabel = 'Upper Berth (UB)'; isWindow = (mod8 === 6); }
+    else if (mod8 === 7) { berthType = 'SL'; berthLabel = 'Side Lower (SL)'; isWindow = true; }
+    else { berthType = 'SU'; berthLabel = 'Side Upper (SU)'; isWindow = true; }
+  }
+
+  const baySize = seatClass === '2A' ? 6 : seatClass === '1A' ? 4 : 8;
+  const bayNumber = Math.ceil(seatNum / baySize);
+
+  return { berthType, berthLabel, isWindow, bayNumber, seatNumber: seatNum };
+}
+
 export class SeatLockService {
+  public static async resetAllDemoState(): Promise<void> {
+    memoryTokens.clear();
+    memoryInventorySeats.clear();
+    memorySeatLocks.clear();
+    if (redis.status === 'ready') {
+      try {
+        const keys = await redis.keys('seat_*');
+        if (keys.length > 0) {
+          await redis.del(...keys);
+        }
+      } catch { /* ignore */ }
+    }
+    if (pool) {
+      try {
+        await pool.query(`UPDATE seat_tokens SET status = 'EXPIRED' WHERE status IN ('RESERVED', 'PAYMENT_PROCESSING')`);
+        await pool.query(`UPDATE seat_inventory SET available_seats = 37`);
+      } catch { /* ignore if DB unavailable */ }
+    }
+  }
+
   public static async releaseLockDistributed(tokenId: string, status: 'EXPIRED' | 'PAYMENT_FAILED' = 'EXPIRED'): Promise<boolean> {
     let record = memoryTokens.get(tokenId);
     if (!record && redis.status === 'ready') {
@@ -72,7 +124,13 @@ export class SeatLockService {
       const tokenId = locks.get(number);
       const token = tokenId ? memoryTokens.get(tokenId) : undefined;
       const occupied = index === 6 || index === 19 || index === 31;
-      return { number, state: occupied ? 'OCCUPIED' : token && token.status === 'RESERVED' ? 'LOCKED' : 'AVAILABLE' };
+      const meta = computeBerthMetadata(index, seatClass);
+      return {
+        number,
+        state: occupied ? 'OCCUPIED' : token && token.status === 'RESERVED' ? 'LOCKED' : 'AVAILABLE',
+        ...meta,
+        coach
+      };
     });
     return { coach, seats, available: seats.filter(seat => seat.state === 'AVAILABLE').length };
   }
@@ -94,7 +152,13 @@ export class SeatLockService {
       const seats = Array.from({ length: 40 }, (_, index) => {
         const number = `${coach}-${String(index + 1).padStart(2, '0')}`;
         const occupied = index === 6 || index === 19 || index === 31;
-        return { number, state: occupied ? 'OCCUPIED' : activeLocks[number] ? 'LOCKED' : 'AVAILABLE' };
+        const meta = computeBerthMetadata(index, seatClass);
+        return {
+          number,
+          state: occupied ? 'OCCUPIED' : activeLocks[number] ? 'LOCKED' : 'AVAILABLE',
+          ...meta,
+          coach
+        };
       });
       return { coach, seats, available: seats.filter(seat => seat.state === 'AVAILABLE').length };
     } catch {

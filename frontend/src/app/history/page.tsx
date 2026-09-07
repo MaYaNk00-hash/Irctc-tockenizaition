@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { ShieldCheck, Clock, CheckCircle2, AlertCircle, RefreshCw, Train, FileText, ArrowDown } from 'lucide-react';
+import AuthGuard from '../../components/auth-guard';
 
 interface AuditItem {
   id?: number;
@@ -144,7 +145,9 @@ function HistoryContent() {
 export default function HistoryPage() {
   return (
     <Suspense fallback={<div className="p-8 text-center text-slate-500 font-semibold">Loading Audit Logs...</div>}>
-      <HistoryContent />
+      <AuthGuard fallbackMessage="Sign in to your IRCTC account to view the cryptographic state machine audit trail.">
+        <HistoryContent />
+      </AuthGuard>
     </Suspense>
   );
 }

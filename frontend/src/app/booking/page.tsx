@@ -2,7 +2,9 @@
 
 import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { ShieldCheck, Clock, User, CheckCircle2, AlertCircle, ArrowRight, Loader2, Lock } from 'lucide-react';
+import { ShieldCheck, Clock, User, CheckCircle2, AlertCircle, ArrowRight, Loader2, Lock, Sparkles } from 'lucide-react';
+import CoachSeatMap, { SeatItem } from '../../components/coach-seat-map';
+import AuthGuard, { useSession } from '../../components/auth-guard';
 
 interface Passenger {
   name: string;
@@ -22,16 +24,30 @@ function BookingContent() {
   const travelDate = searchParams.get('travelDate') || '2026-08-26';
   const admissionToken = searchParams.get('admissionToken') || '';
   const passengerCount = Math.min(4, Math.max(1, Number(searchParams.get('passengers') || '1')));
+  const { session } = useSession();
 
-  const [passengers, setPassengers] = useState<Passenger[]>(() => Array.from({ length: passengerCount }, (_, index) => ({ name: index === 0 ? 'Mayank Kumar' : '', age: 26, gender: 'Male', berth: 'Lower' })));
+  const [passengers, setPassengers] = useState<Passenger[]>(() => Array.from({ length: passengerCount }, (_, index) => ({ name: index === 0 ? (session?.displayName || 'Passenger 1') : '', age: 26, gender: 'Male', berth: 'Lower' })));
+
+  useEffect(() => {
+    if (session?.displayName) {
+      setPassengers(prev => {
+        const copy = [...prev];
+        if (copy[0] && (!copy[0].name || copy[0].name === 'Passenger 1' || copy[0].name === 'Mayank Kumar')) {
+          copy[0].name = session.displayName;
+        }
+        return copy;
+      });
+    }
+  }, [session]);
 
   const [bookingState, setBookingState] = useState<'IDLE' | 'SCHEDULING' | 'RESERVED' | 'EXHAUSTED' | 'FAILED'>('IDLE');
   const [tokenId, setTokenId] = useState<string>('');
   const [expiresAt, setExpiresAt] = useState<string>('');
   const [timeLeftSec, setTimeLeftSec] = useState<number>(300);
   const [errorMessage, setErrorMessage] = useState<string>('');
-  const [seatMap, setSeatMap] = useState<Array<{ number: string; state: string }>>([]);
   const [seatsLoading, setSeatsLoading] = useState(true);
+  const [seatMap, setSeatMap] = useState<SeatItem[]>([]);
+  const [coachName, setCoachName] = useState<string>('B2');
   const [selectedSeats, setSelectedSeats] = useState<string[]>([]);
   const [bookingKey] = useState(() => `booking_${crypto.randomUUID()}`);
 
@@ -42,6 +58,7 @@ function BookingContent() {
       .then(res => res.json()).then(data => {
         if (!data.success) throw new Error(data.error || 'Seat service unavailable');
         setSeatMap(data.data.seats);
+        if (data.data.coach) setCoachName(data.data.coach);
       })
       .catch((error: Error) => setErrorMessage(error.message || 'Seat inventory is unavailable.'))
       .finally(() => setSeatsLoading(false));
@@ -96,10 +113,11 @@ function BookingContent() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Idempotency-Key': bookingKey
+        'Idempotency-Key': bookingKey,
+        ...(session?.token ? { 'Authorization': `Bearer ${session.token}` } : {})
       },
       body: JSON.stringify({
-        userId: 1001,
+        userId: Number(session?.id) || 1001,
         trainId,
         seatClass,
         travelDate,
@@ -117,15 +135,18 @@ function BookingContent() {
           window.localStorage.setItem(`tatkal.booking.${data.data.tokenId}`, JSON.stringify({ trainId, trainName, seatClass, travelDate, passengers, selectedSeats, amount: 1450 }));
         } else {
           setBookingState('FAILED');
-          if (status === 401 || status === 403 || status === 409) {
+          const isAdmissionError = (status === 401 || (status === 403 && String(data.error || '').toLowerCase().includes('admission')));
+          if (isAdmissionError) {
             const queueKeyPrefix = `tatkal.queue.${trainId}:${seatClass}:${travelDate}.`;
             Object.keys(window.localStorage)
               .filter(key => key.startsWith(queueKeyPrefix))
               .forEach(key => window.localStorage.removeItem(key));
             setErrorMessage('Your waiting-room admission expired. Returning you to the queue for a fresh admission.');
-            window.setTimeout(() => router.replace(`/waiting-room?trainId=${trainId}&trainName=${encodeURIComponent(trainName)}&seatClass=${seatClass}&travelDate=${travelDate}&passengers=${passengerCount}`), 1200);
+            window.setTimeout(() => router.replace(`/waiting-room?trainId=${trainId}&trainName=${encodeURIComponent(trainName)}&seatClass=${seatClass}&travelDate=${travelDate}&passengers=${passengerCount}`), 1500);
           } else {
-            setErrorMessage(data.error || data.data?.reason || 'Seat reservation was not completed.');
+            const reason = data.error || data.data?.reason || 'Selected berth(s) are no longer available. Please select another seat.';
+            setErrorMessage(reason);
+            loadSeats(); // Refresh coach map to show latest seat availability
           }
         }
       })
@@ -141,11 +162,12 @@ function BookingContent() {
     return `${mins}:${seconds < 10 ? '0' : ''}${seconds}`;
   };
 
-  const toggleSeat = (seat: { number: string; state: string }) => {
-    if (seat.state !== 'AVAILABLE') return;
-    setSelectedSeats(current => current.includes(seat.number)
-      ? current.filter(number => number !== seat.number)
-      : current.length >= passengers.length ? current : [...current, seat.number]);
+  const toggleSeatByNumber = (seatNumber: string) => {
+    const seat = seatMap.find(s => s.number === seatNumber);
+    if (!seat || seat.state !== 'AVAILABLE') return;
+    setSelectedSeats(current => current.includes(seatNumber)
+      ? current.filter(number => number !== seatNumber)
+      : current.length >= passengers.length ? current : [...current, seatNumber]);
   };
 
   return (
@@ -259,15 +281,56 @@ function BookingContent() {
             </div>
           ))}
 
-          <div className="space-y-3 border-t pt-5">
-            <div className="flex items-center justify-between"><h3 className="text-sm font-bold text-irctc-navy">Choose your seats</h3><span className="text-xs text-slate-500">{selectedSeats.length}/{passengers.length} selected</span></div>
-            {seatsLoading && <p className="text-xs text-slate-500">Loading current seat availability…</p>}
-            {!seatsLoading && seatMap.length === 0 && <button type="button" onClick={loadSeats} className="rounded-lg border border-irctc-navy px-3 py-2 text-xs font-bold text-irctc-navy hover:bg-blue-50">Retry loading seats</button>}
-            <div className="flex flex-wrap gap-3 text-[11px] font-semibold"><span className="flex items-center gap-1"><i className="w-3 h-3 rounded bg-white border border-slate-400" />Available</span><span className="flex items-center gap-1"><i className="w-3 h-3 rounded bg-irctc-orange" />Selected</span><span className="flex items-center gap-1"><i className="w-3 h-3 rounded bg-slate-400" />Locked</span><span className="flex items-center gap-1"><i className="w-3 h-3 rounded bg-slate-800" />Occupied</span></div>
-            <div className="grid grid-cols-4 sm:grid-cols-8 gap-2 rounded-lg bg-slate-100 p-3">
-              {seatMap.map(seat => <button key={seat.number} type="button" aria-label={`Seat ${seat.number}, ${selectedSeats.includes(seat.number) ? 'selected' : seat.state.toLowerCase()}`} onClick={() => toggleSeat(seat)} disabled={seat.state !== 'AVAILABLE'} className={`rounded p-2 text-[11px] font-bold transition ${selectedSeats.includes(seat.number) ? 'bg-irctc-orange text-white' : seat.state === 'OCCUPIED' ? 'bg-slate-800 text-white cursor-not-allowed' : seat.state === 'LOCKED' ? 'bg-slate-400 text-white cursor-not-allowed' : 'bg-white text-irctc-navy border border-slate-300 hover:border-irctc-orange'}`}>{seat.number.split('-')[1]}</button>)}
+          <div className="space-y-4 border-t pt-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-irctc-navy flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-irctc-orange" />
+                  Interactive 2D Coach & Berth Selection
+                </h3>
+                <p className="text-xs text-slate-500">Pick your preferred Lower, Middle, Upper, or Side Berth</p>
+              </div>
+              <span className="text-xs font-bold text-irctc-navy bg-blue-50 px-2.5 py-1 rounded-full border border-blue-200">
+                {selectedSeats.length}/{passengers.length} selected
+              </span>
             </div>
-            {selectedSeats.length > 0 && <p className="text-xs font-semibold text-emerald-800">Selected: {selectedSeats.join(', ')}</p>}
+
+            {seatsLoading && (
+              <div className="p-8 text-center text-xs text-slate-500 font-semibold bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin text-irctc-orange" />
+                Loading real-time berth availability for Coach {coachName}...
+              </div>
+            )}
+
+            {!seatsLoading && seatMap.length === 0 && (
+              <div className="p-4 text-center bg-slate-50 rounded-xl border border-slate-200">
+                <button type="button" onClick={loadSeats} className="rounded-lg border border-irctc-navy px-3 py-2 text-xs font-bold text-irctc-navy hover:bg-blue-50">
+                  Retry loading seats
+                </button>
+              </div>
+            )}
+
+            {!seatsLoading && seatMap.length > 0 && (
+              <CoachSeatMap
+                seats={seatMap}
+                selectedSeats={selectedSeats}
+                maxSelectable={passengers.length}
+                onToggleSeat={toggleSeatByNumber}
+                seatClass={seatClass}
+                coachName={coachName}
+              />
+            )}
+
+            {selectedSeats.length > 0 && (
+              <div className="bg-emerald-50 border border-emerald-300 p-3 rounded-xl flex items-center justify-between text-xs">
+                <span className="font-semibold text-emerald-900">
+                  Selected Berths: <strong className="font-mono text-emerald-950">{selectedSeats.join(', ')}</strong>
+                </span>
+                <span className="text-[11px] text-emerald-700 font-semibold">
+                  {selectedSeats.length === passengers.length ? '✓ All passenger berths chosen' : `Need ${passengers.length - selectedSeats.length} more`}
+                </span>
+              </div>
+            )}
           </div>
 
           {errorMessage && (
@@ -331,7 +394,9 @@ function BookingContent() {
 export default function BookingPage() {
   return (
     <Suspense fallback={<div className="p-8 text-center text-slate-500 font-semibold">Loading Booking Scheduler...</div>}>
-      <BookingContent />
+      <AuthGuard fallbackMessage="Sign in to your IRCTC account to reserve and lock train berths.">
+        <BookingContent />
+      </AuthGuard>
     </Suspense>
   );
 }

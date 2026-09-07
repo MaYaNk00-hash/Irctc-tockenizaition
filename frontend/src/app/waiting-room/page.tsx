@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { ShieldAlert, Clock, CheckCircle2, Cpu, Lock, AlertTriangle, ArrowRight, Loader2 } from 'lucide-react';
+import AuthGuard, { useSession } from '../../components/auth-guard';
 
 function WaitingRoomContent() {
   const API_BASE = process.env.NEXT_PUBLIC_API_URL || (process.env.NODE_ENV === 'development' ? 'http://localhost:5000' : '');
@@ -65,6 +66,8 @@ function WaitingRoomContent() {
     joinWaitingRoom();
   }, []);
 
+  const { session } = useSession();
+
   const joinWaitingRoom = (powNonce?: string, captchaAnswer?: number, verificationId?: string) => {
     setLoading(true);
     setError('');
@@ -88,10 +91,11 @@ function WaitingRoomContent() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Idempotency-Key': `join_${trainKey}_${fingerprint}_${verificationId || 'initial'}`
+        'Idempotency-Key': `join_${trainKey}_${fingerprint}_${verificationId || 'initial'}`,
+        ...(session?.token ? { 'Authorization': `Bearer ${session.token}` } : {})
       },
       body: JSON.stringify({
-        userId: 1001,
+        userId: Number(session?.id) || 1001,
         trainId,
         seatClass,
         travelDate,
@@ -329,7 +333,9 @@ function WaitingRoomContent() {
 export default function WaitingRoomPage() {
   return (
     <Suspense fallback={<div className="p-8 text-center text-slate-500 font-semibold">Loading Virtual Waiting Room...</div>}>
-      <WaitingRoomContent />
+      <AuthGuard fallbackMessage="Sign in to your IRCTC account to enter the Tatkal waiting room and participate in batch admission.">
+        <WaitingRoomContent />
+      </AuthGuard>
     </Suspense>
   );
 }

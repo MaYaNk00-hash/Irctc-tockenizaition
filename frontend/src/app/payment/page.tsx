@@ -1,13 +1,16 @@
 'use client';
 
-import { useState, Suspense } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { CreditCard, ShieldCheck, Zap, AlertTriangle, CheckCircle2, RefreshCw, Lock, Loader2 } from 'lucide-react';
+import { CreditCard, ShieldCheck, Zap, AlertTriangle, CheckCircle2, RefreshCw, Lock, Loader2, ArrowRight, FileText } from 'lucide-react';
+import AuthGuard, { useSession } from '../../components/auth-guard';
+import RailwaysETicket from '../../components/railways-e-ticket';
 
 function PaymentContent() {
   const API_BASE = process.env.NEXT_PUBLIC_API_URL || (process.env.NODE_ENV === 'development' ? 'http://localhost:5000' : '');
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { session } = useSession();
 
   const tokenId = searchParams.get('tokenId') || 'token_demo_123';
   const amount = searchParams.get('amount') || '1450';
@@ -16,10 +19,14 @@ function PaymentContent() {
   const [simulatedMode, setSimulatedMode] = useState<'SUCCESS' | 'FAILED' | 'DELAYED_LATE_SUCCESS'>('SUCCESS');
   const [processing, setProcessing] = useState<boolean>(false);
   const [result, setResult] = useState<any>(null);
+  const [savedBooking, setSavedBooking] = useState<any>(null);
 
-  const goToBookingHistory = () => {
-    window.setTimeout(() => router.push(`/history?tokenId=${tokenId}`), 2500);
-  };
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(`tatkal.booking.${tokenId}`);
+      if (raw) setSavedBooking(JSON.parse(raw));
+    } catch { /* ignore */ }
+  }, [tokenId]);
 
   const handlePayNow = (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,7 +37,8 @@ function PaymentContent() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Idempotency-Key': `pay_${tokenId}_${Date.now()}`
+        'Idempotency-Key': `pay_${tokenId}_${Date.now()}`,
+        ...(session?.token ? { 'Authorization': `Bearer ${session.token}` } : {})
       },
       body: JSON.stringify({
         tokenId,
@@ -43,7 +51,6 @@ function PaymentContent() {
       .then((data) => {
         if (data.success) {
           setResult(data.data);
-          if (data.data.status === 'CONFIRMED') goToBookingHistory();
         } else {
           setResult({ status: 'PAYMENT_FAILED', message: data.error || 'Payment was not completed.', auditReason: 'Backend payment request failed.' });
         }
@@ -53,6 +60,43 @@ function PaymentContent() {
       })
       .finally(() => setProcessing(false));
   };
+
+  if (result && result.status === 'CONFIRMED') {
+    return (
+      <div className="max-w-3xl mx-auto space-y-6">
+        <RailwaysETicket
+          pnr={result.pnr || '9876543210'}
+          trainId={savedBooking?.trainId || '12002'}
+          trainName={savedBooking?.trainName || 'Bhopal Shatabdi Express'}
+          seatClass={savedBooking?.seatClass || '3A'}
+          travelDate={savedBooking?.travelDate || '2026-08-26'}
+          passengers={savedBooking?.passengers || [{ name: session?.displayName || 'Mayank Kumar', age: 26, gender: 'Male' }]}
+          selectedSeats={savedBooking?.selectedSeats || ['B2-01']}
+          amount={Number(amount)}
+          tokenId={tokenId}
+        />
+
+        <div className="bg-slate-900 text-white rounded-xl p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-3 border border-slate-800 shadow">
+          <div>
+            <div className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+              <FileText className="w-4 h-4 text-emerald-400" />
+              <span>Immutable State Machine Audit Log</span>
+            </div>
+            <p className="text-[11px] text-slate-300 mt-0.5">
+              Every token transition is recorded with millisecond timestamps and reasons.
+            </p>
+          </div>
+          <button
+            onClick={() => router.push(`/history?tokenId=${tokenId}`)}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-lg transition flex items-center gap-1.5 whitespace-nowrap shadow"
+          >
+            <span>View Full Audit Trail</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -152,21 +196,25 @@ function PaymentContent() {
         </div>
 
         {result && (
-          <div className={`p-4 rounded-xl text-xs font-semibold space-y-1 ${result.status === 'CONFIRMED'
-              ? 'bg-emerald-50 text-emerald-950 border border-emerald-300'
-              : result.status === 'REFUND_COMPLETED'
-                ? 'bg-purple-50 text-purple-950 border border-purple-300'
-                : 'bg-rose-50 text-rose-950 border border-rose-300'
-            }`}>
+          <div className={`p-4 rounded-xl text-xs font-semibold space-y-2 ${
+            result.status === 'REFUND_COMPLETED'
+              ? 'bg-purple-50 text-purple-950 border border-purple-300'
+              : 'bg-rose-50 text-rose-950 border border-rose-300'
+          }`}>
             <div className="font-bold flex items-center text-sm">
-              {result.status === 'CONFIRMED' && <CheckCircle2 className="w-5 h-5 mr-2 text-emerald-600" />}
-              {result.status === 'REFUND_COMPLETED' && <RefreshCw className="w-5 h-5 mr-2 text-purple-600 animate-spin" />}
+              {result.status === 'REFUND_COMPLETED' && <RefreshCw className="w-5 h-5 mr-2 text-purple-600" />}
               {result.status === 'PAYMENT_FAILED' && <AlertTriangle className="w-5 h-5 mr-2 text-rose-600" />}
               Status: {result.status}
             </div>
             <p>{result.message}</p>
-            {result.pnr && <p className="font-bold text-irctc-navy">PNR: {result.pnr}</p>}
-            <p className="text-[10px] opacity-75 pt-1">Redirecting to plain-language audit trail...</p>
+            {result.auditReason && <p className="text-[11px] opacity-85">Audit Reason: {result.auditReason}</p>}
+            <button
+              type="button"
+              onClick={() => router.push(`/history?tokenId=${tokenId}`)}
+              className="mt-2 inline-flex items-center gap-1 text-xs font-bold text-indigo-700 underline"
+            >
+              View State Machine Audit Trail <ArrowRight className="w-3.5 h-3.5" />
+            </button>
           </div>
         )}
 
@@ -194,7 +242,9 @@ function PaymentContent() {
 export default function PaymentPage() {
   return (
     <Suspense fallback={<div className="p-8 text-center text-slate-500 font-semibold">Loading Payment Portal...</div>}>
-      <PaymentContent />
+      <AuthGuard fallbackMessage="Sign in to your IRCTC account to authorize payment and confirm your Tatkal ticket.">
+        <PaymentContent />
+      </AuthGuard>
     </Suspense>
   );
 }

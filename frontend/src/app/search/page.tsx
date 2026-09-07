@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
 import { Search, Train, Calendar, ShieldCheck, ArrowRight, AlertCircle, Sparkles, CheckCircle2, Zap } from 'lucide-react';
+import AuthGuard, { getStoredSession } from '../../components/auth-guard';
 
 interface TrainData {
   trainId: string;
@@ -15,7 +16,7 @@ interface TrainData {
   classes: string[];
 }
 
-export default function SearchPage() {
+function SearchContent() {
   const router = useRouter();
   const [trains, setTrains] = useState<TrainData[]>([]);
   const [selectedClass, setSelectedClass] = useState<string>('3A');
@@ -64,10 +65,15 @@ export default function SearchPage() {
     };
 
     const fingerprint = `fp_browser_${typeof window !== 'undefined' ? window.navigator.userAgent.replace(/\s+/g, '') : 'default'}`;
+    const destinationUrl = `/waiting-room?trainId=${train.trainId}&trainName=${encodeURIComponent(train.name)}&seatClass=${seatClass}&travelDate=${travelDate}&passengers=${passengerCount}&fp=${encodeURIComponent(fingerprint)}&signals=${encodeURIComponent(JSON.stringify(signals))}`;
 
-    router.push(
-      `/waiting-room?trainId=${train.trainId}&trainName=${encodeURIComponent(train.name)}&seatClass=${seatClass}&travelDate=${travelDate}&passengers=${passengerCount}&fp=${encodeURIComponent(fingerprint)}&signals=${encodeURIComponent(JSON.stringify(signals))}`
-    );
+    const session = getStoredSession();
+    if (!session) {
+      router.push(`/auth?returnUrl=${encodeURIComponent(destinationUrl)}`);
+      return;
+    }
+
+    router.push(destinationUrl);
   };
 
   const stations = Array.from(new Set(trains.flatMap(train => [train.origin, train.destination])));
@@ -239,5 +245,15 @@ export default function SearchPage() {
         {!loading && filteredTrains.length === 0 && <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600">No mock Tatkal train matches this route and class. Try another station or class.</div>}
       </div>
     </div>
+  );
+}
+
+export default function SearchPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center text-slate-500 font-semibold">Loading Train Search...</div>}>
+      <AuthGuard fallbackMessage="Sign in to your IRCTC account to search trains, check Tatkal quota seats, and access the high-concurrency booking queue.">
+        <SearchContent />
+      </AuthGuard>
+    </Suspense>
   );
 }

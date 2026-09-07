@@ -16,6 +16,7 @@
     { "source": "/waiting-room/(.*)", "destination": { "service": "backend" } },
     { "source": "/booking/(.*)", "destination": { "service": "backend" } },
     { "source": "/health", "destination": { "service": "backend" } },
+    { "source": "/ready", "destination": { "service": "backend" } },
     { "source": "/(.*)", "destination": { "service": "frontend" } }
   ]
 }

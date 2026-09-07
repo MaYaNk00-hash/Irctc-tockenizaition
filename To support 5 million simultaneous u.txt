@@ -1,0 +1,96 @@
+To support 5 million simultaneous users, the following work is still required:
+
+**1. Infrastructure**
+- Deploy multiple backend replicas behind a load balancer.
+- Use Kubernetes or equivalent autoscaling.
+- Add CDN and WAF protection.
+- Use multi-region deployment if required.
+- Configure graceful shutdown and zero-downtime deployments.
+
+**2. Database**
+- Use managed PostgreSQL with read replicas and high availability.
+- Add PgBouncer or another connection pooler.
+- Tune indexes and query plans.
+- Partition large tables such as bookings, audit logs, and waiting-room tickets.
+- Configure backups, failover, and disaster recovery.
+- Set `DB_POOL_MAX` according to the total database connection budget.
+
+**3. Redis**
+- Replace the single Redis instance with Redis Cluster or a highly available managed Redis service.
+- Separate Redis workloads for rate limits, queues, seat locks, and sessions.
+- Configure persistence, replication, failover, and memory eviction policies.
+
+**4. Queue and booking processing**
+- Move booking work to independently scalable worker services.
+- Use durable Redis Streams, Kafka, or another production queue.
+- Partition work by train, journey date, and class.
+- Guarantee idempotency across retries.
+- Prevent duplicate seat allocation with database transactions or distributed locks.
+
+**5. Waiting room**
+- Replace process-local timers and in-memory state with distributed workers.
+- Store queue positions and admission state in Redis/PostgreSQL.
+- Use adaptive batching and backpressure.
+- Ensure users reconnect safely after API-instance changes.
+
+**6. WebSockets**
+- Add a WebSocket gateway or Redis Pub/Sub adapter.
+- Do not depend on process-local WebSocket subscriptions.
+- Support reconnects, connection limits, heartbeats, and horizontal scaling.
+- Consider polling or Server-Sent Events for very large populations.
+
+**7. Authentication and security**
+- Add refresh-token rotation and token revocation.
+- Store sessions in Redis or secure HTTP-only cookies.
+- Add account lockout and abuse detection.
+- Rate-limit by account, device, IP, and identifier, not only IP.
+- Add CAPTCHA or proof-of-work escalation for suspicious traffic.
+- Store secrets in a secret manager.
+- Add TLS, security headers, request validation, and audit logging.
+- Protect admin endpoints with admin authentication and authorization.
+
+**8. API performance**
+- Add request timeouts and circuit breakers.
+- Add response caching for train/search data.
+- Compress responses where useful.
+- Avoid expensive synchronous work inside Express handlers.
+- Add pagination and strict request-size limits.
+- Use structured logging without logging passwords or tokens.
+
+**9. Monitoring**
+- Add metrics for:
+  - Requests per second
+  - Active connections
+  - Queue depth
+  - Database pool usage
+  - Redis latency
+  - Seat-lock conflicts
+  - Authentication failures
+  - Booking latency
+  - Error rates
+- Add centralized logs, tracing, dashboards, and alerts.
+- Monitor saturation, not only uptime.
+
+**10. Load testing**
+- Build realistic tests for 5 million connected users.
+- Test separate scenarios:
+  - Login/signup spike
+  - Waiting-room entry spike
+  - Seat selection contention
+  - Payment callbacks
+  - WebSocket reconnect storms
+- Run staged tests: 100k, 500k, 1m, 2.5m, then 5m.
+- Test failures of PostgreSQL, Redis, workers, and API replicas.
+- Establish latency and error-rate targets before claiming readiness.
+
+**Current project-specific blockers**
+
+- Docker Compose currently runs one backend, one PostgreSQL instance, and one Redis instance.
+- Some scheduler and expiry behavior still uses process-local timers.
+- The admin metrics simulation is not a real load test.
+- WebSocket handling is process-local.
+- There is no Kubernetes or autoscaling configuration.
+- There is no production load-test suite.
+- PostgreSQL and Redis are not configured for clustered operation.
+
+The next practical milestone is a horizontally scalable staging environment with managed PostgreSQL, Redis Cluster, worker replicas, observability, and a staged load test.
