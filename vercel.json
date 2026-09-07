@@ -1,22 +1,16 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "services": {
-    "frontend": {
-      "root": "frontend",
-      "framework": "nextjs"
-    },
-    "backend": {
-      "root": "backend",
-      "framework": "express",
-      "entrypoint": "src/server.ts"
-    }
-  },
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": { "service": "backend" } },
-    { "source": "/waiting-room/(.*)", "destination": { "service": "backend" } },
-    { "source": "/booking/(.*)", "destination": { "service": "backend" } },
-    { "source": "/health", "destination": { "service": "backend" } },
-    { "source": "/ready", "destination": { "service": "backend" } },
-    { "source": "/(.*)", "destination": { "service": "frontend" } }
+  "version": 2,
+  "builds": [
+    { "src": "frontend/package.json", "use": "@vercel/next" },
+    { "src": "backend/src/server.ts", "use": "@vercel/node" }
+  ],
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/backend/src/server.ts" },
+    { "src": "/waiting-room/(.*)", "dest": "/backend/src/server.ts" },
+    { "src": "/booking/(.*)", "dest": "/backend/src/server.ts" },
+    { "src": "/health", "dest": "/backend/src/server.ts" },
+    { "src": "/ready", "dest": "/backend/src/server.ts" },
+    { "src": "/(.*)", "dest": "/frontend/$1" }
   ]
 }
