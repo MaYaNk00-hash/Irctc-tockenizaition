@@ -3,7 +3,7 @@ import cors from 'cors';
 import http from 'http';
 import crypto from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
-import { initDb, isDbLive } from './db';
+import { dbReady, isDbLive } from './db';
 import { BotDetectionService } from './services/botDetection';
 import { WaitingRoomService, waitingRoomConfig } from './services/waitingRoom';
 import { PartitionedSchedulerService, BookingJob } from './services/scheduler';
@@ -22,9 +22,6 @@ app.use(express.json());
 
 // Apply idempotency middleware to all mutating endpoints
 app.use(idempotencyMiddleware);
-
-// Initialize DB schema & Redis connections
-initDb();
 
 // Seeded Trains List
 export const SEEDED_TRAINS = [
@@ -243,6 +240,7 @@ app.get('/booking/status/:tokenId', async (req, res) => {
 // 6. Audit Trail History
 app.get('/api/booking/audit/:tokenId', async (req, res) => {
   try {
+    await dbReady;
     const result = await AuditService.getAuditHistoryWithSource(req.params.tokenId);
     if (result.source === 'unavailable') {
       return res.status(503).json({ success: false, error: 'Audit storage is unavailable. Start Postgres or Redis and retry.' });

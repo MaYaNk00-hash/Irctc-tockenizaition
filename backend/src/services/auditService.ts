@@ -53,12 +53,14 @@ export class AuditService {
   }
 
   public static async getAuditHistoryWithSource(tokenId: string): Promise<{ entries: AuditLogEntry[]; source: 'postgres' | 'redis' | 'demo' | 'unavailable' }> {
+    let postgresAvailable = false;
     try {
       const res = await pool.query(
         `SELECT id, token_id as "tokenId", from_status as "fromStatus", to_status as "toStatus", reason, created_at as "createdAt"
          FROM status_audit_log WHERE token_id = $1 ORDER BY created_at ASC`,
         [tokenId]
       );
+      postgresAvailable = true;
       if (res.rows.length > 0) return { entries: res.rows, source: 'postgres' };
       const ticketResult = await pool.query(
         `SELECT id, ticket_id as "tokenId", from_status as "fromStatus", to_status as "toStatus", reason, created_at as "createdAt"
@@ -67,6 +69,9 @@ export class AuditService {
       );
       if (ticketResult.rows.length > 0) return { entries: ticketResult.rows, source: 'postgres' };
     } catch { /* Redis is the degraded durable store. */ }
+
+    // An empty result from a reachable database is valid history, not an outage.
+    if (postgresAvailable) return { entries: [], source: 'postgres' };
 
     if (redis.status === 'ready') {
       try {

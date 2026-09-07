@@ -85,6 +85,8 @@ export async function initDb() {
   }
 }
 
+export const dbReady = initDb();
+
 export function isDbLive() {
   return { pg: isPgConnected, redis: isRedisConnected };
 }
