@@ -109,7 +109,7 @@ function HistoryContent() {
             <FileText className="w-5 h-5 text-irctc-orange" />
             <span>"Why Did This Happen?" — State Machine Audit Trail</span>
           </div>
-          <span className="text-xs text-slate-500 font-mono">{source ? `Persisted in ${source === 'postgres' ? 'status_audit_log' : source === 'redis' ? 'Redis audit store' : 'development demo audit store'}` : 'Awaiting audit storage'}</span>
+          <span className="text-xs text-slate-500 font-mono">{source ? source === 'fallback' ? 'Using production fallback audit' : `Persisted in ${source === 'postgres' ? 'status_audit_log' : source === 'redis' ? 'Redis audit store' : 'development demo audit store'}` : 'Awaiting audit storage'}</span>
         </div>
 
         {error && <div role="alert" className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-xs font-semibold text-rose-800 flex items-center justify-between gap-3"><span>{error}</span><button type="button" onClick={retryAudit} className="underline whitespace-nowrap">Retry</button></div>}

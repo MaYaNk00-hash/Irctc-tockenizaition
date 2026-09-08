@@ -116,7 +116,30 @@ To load the demo train inventory after migrating:
 npx ts-node ../scripts/seed-db.ts
 ```
 
-### 3. Testing
+### 3. Vercel Production Deployment
+
+This repository is configured as a single Vercel project with the Next.js
+frontend and Express API function. In the Vercel project settings, add these
+environment variables for **Production**:
+
+- `DATABASE_URL`: a PostgreSQL connection URI. For Supabase, use the Session
+       Pooler URI rather than the `/rest/v1/` URL or the direct database hostname.
+- `DB_SSL=true`
+- `DB_IPV4=true` when the selected database endpoint is IPv4-only.
+- `REDIS_URL`: a Redis TCP connection URI from a managed Redis provider. A
+       Redis REST URL and token are not interchangeable with `REDIS_URL`.
+- `JWT_SECRET`: a generated secret of at least 32 characters.
+- `NODE_ENV=production`
+- Leave `NEXT_PUBLIC_API_URL` empty when frontend and API use the same Vercel
+       project; the frontend then calls the routed `/api` function directly.
+
+After setting the variables, run the database migration from a machine that
+can reach the hosted database, then redeploy Vercel. Verify `/health` and
+`/ready`; readiness must report both `postgres.connected` and
+`redis.connected` as `true`. If either is false, booking audit history cannot
+be durable in a serverless deployment.
+
+### 4. Testing
 
 ```bash
 cd backend

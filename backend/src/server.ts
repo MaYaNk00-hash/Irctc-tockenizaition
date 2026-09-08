@@ -41,12 +41,13 @@ app.get('/health', (req, res) => {
   res.json({ status: 'UP', timestamp: new Date().toISOString() });
 });
 
-app.get('/api/ready', (req, res) => {
+app.get(['/api/ready', '/ready'], (req, res) => {
   const dbStatus = isDbLive();
   const uptime = process.uptime();
   const mem = process.memoryUsage();
-  res.json({
-    status: 'READY',
+  const ready = dbStatus.pg && dbStatus.redis;
+  res.status(ready ? 200 : 503).json({
+    status: ready ? 'READY' : 'NOT_READY',
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.floor(uptime),
     services: {
